@@ -1,0 +1,387 @@
+import pandas as pd
+import cx_Oracle as orcCon
+from cx_Oracle import DatabaseError
+from sqlalchemy import create_engine
+import os
+import glob
+import logging
+from datetime import datetime
+
+# =============================================
+# CONFIGURAÇÕES - EDITAR ESTA SEÇÃO!
+# =============================================
+
+# 1. CONEXÃO COM O BANCO ORACLE
+ORACLE_CONNECTION = "usuario/senha@localhost:1521/app1mf004h"
+# FORMATO: "seu_usuario/sua_senha@host:porta/nome_do_banco"
+# EXEMPLO: "admin/senha123@192.168.1.100:1521/app1mf004h"
+
+# 2. PASTA ONDE ESTÃO OS ARQUIVOS CSV
+PASTA_ARQUIVOS = "C:/caminho/para/sua/pasta/arquivos"
+# EXEMPLOS: 
+#   "C:/dados/csv" (Windows)
+#   "/home/usuario/dados" (Linux)
+#   "./arquivos" (Pasta atual)
+
+# 3. CONFIGURAÇÕES DE PROCESSAMENTO
+CHUNKSIZE = 10000  # Número de linhas processadas por vez
+METODO_INSERCAO = 'to_sql'  # 'to_sql' (recomendado) ou 'execute'
+
+# =============================================
+# FIM DAS CONFIGURAÇÕES - NÃO EDITAR ABAIXO
+# =============================================
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('processamento_oracle.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class OracleCSVLoader:
+    """
+    Classe para carregar arquivos CSV para o banco Oracle
+    Explicação das principais funções:
+    """
+    
+    def __init__(self, connection_string):
+        """
+        INICIALIZAÇÃO: Configura a conexão com o banco
+        - connection_string: string de conexão no formato usuario/senha@host:porta/banco
+        """
+        self.connection_string = connection_string
+        self.engine = None
+        self.conn = None
+        logger.info("Loader Oracle inicializado")
+    
+    def connect(self):
+        """
+        CONEXÃO: Estabelece conexão com o banco Oracle
+        - Cria duas conexões: uma com cx_Oracle e outra com SQLAlchemy
+        - Verifica versões do cliente e servidor
+        """
+        try:
+            logger.info("Tentando conectar ao Oracle...")
+            
+            # Conexão usando cx_Oracle (para operações tradicionais)
+            self.conn = orcCon.connect(self.connection_string)
+            
+            # Conexão usando SQLAlchemy (para pandas to_sql - mais eficiente)
+            # Converte: "usuario/senha@host:porta/banco" para "oracle://usuario:senha@host:porta/banco"
+            sqlalchemy_conn = self.connection_string.replace("@", ":", 1)
+            self.engine = create_engine(f'oracle://{sqlalchemy_conn}')
+            
+            if self.conn:
+                logger.info("✅ Conexão estabelecida com sucesso!")
+                logger.info(f"Versão cx_Oracle: {orcCon.version}")
+                logger.info(f"Versão Database: {self.conn.version}")
+                logger.info(f"Versão Client: {orcCon.clientversion()}")
+                return True
+                
+        except DatabaseError as e:
+            logger.error("❌ Erro na conexão com Oracle")
+            err, = e.args
+            logger.error(f"Código erro: {err.code}")
+            logger.error(f"Mensagem erro: {err.message}")
+            return False
+    
+    def disconnect(self):
+        """
+        DESCONEXÃO: Fecha todas as conexões abertas
+        - Importante para liberar recursos do banco
+        """
+        if self.conn:
+            self.conn.close()
+            logger.info("Conexão cx_Oracle fechada")
+        if self.engine:
+            self.engine.dispose()
+            logger.info("Conexão SQLAlchemy fechada")
+    
+    def criar_tabela_do_csv(self, arquivo_csv, nome_tabela):
+        """
+        CRIAÇÃO DE TABELA: Analisa o CSV e cria tabela com estrutura correspondente
+        - Lê as primeiras linhas do CSV para determinar tipos de dados
+        - Cria tabela com colunas e tipos apropriados
+        - Se tabela existir, é dropada e recriada
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Ler amostra do CSV para análise da estrutura
+            logger.info(f"Analisando estrutura do arquivo: {arquivo_csv}")
+            df_amostra = pd.read_csv(arquivo_csv, nrows=10)  # Lê só 10 linhas para análise
+            colunas = df_amostra.columns.tolist()
+            
+            # Limpar nomes de colunas (remove espaços, caracteres especiais)
+            colunas_limpas = [col.replace(' ', '_').replace('-', '_').replace('.', '_').lower() for col in colunas]
+            
+            logger.info(f"🔄 Dropando tabela {nome_tabela} se existir...")
+            cursor.execute(f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {nome_tabela}'; EXCEPTION WHEN OTHERS THEN NULL; END;")
+            
+            logger.info(f"🔄 Criando tabela {nome_tabela}...")
+            
+            # Construir comando SQL de criação
+            sql_criacao = f"CREATE TABLE {nome_tabela} ("
+            
+            for col_original, col_limpa in zip(colunas, colunas_limpas):
+                # Determinar tipo de dado Oracle baseado no tipo pandas
+                tipo_dado = self._determinar_tipo_oracle(df_amostra[col_original])
+                sql_criacao += f'"{col_limpa}" {tipo_dado}, '
+            
+            sql_criacao = sql_criacao.rstrip(', ') + ")"
+            cursor.execute(sql_criacao)
+            self.conn.commit()
+            
+            logger.info(f"✅ Tabela {nome_tabela} criada com sucesso!")
+            cursor.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao criar tabela {nome_tabela}: {e}")
+            return False
+    
+    def _determinar_tipo_oracle(self, serie_pandas):
+        """
+        DETERMINA TIPOS: Mapeia tipos pandas para tipos Oracle
+        - int64 -> NUMBER
+        - float64 -> FLOAT  
+        - object -> VARCHAR2(1000)
+        - datetime -> DATE
+        """
+        tipo_pandas = str(serie_pandas.dtype)
+        
+        if 'int' in tipo_pandas:
+            return 'NUMBER'
+        elif 'float' in tipo_pandas:
+            return 'FLOAT'
+        elif 'datetime' in tipo_pandas:
+            return 'DATE'
+        else:
+            # Para textos, usar VARCHAR2 com tamanho generoso
+            return 'VARCHAR2(1000)'
+    
+    def inserir_dados_to_sql(self, arquivo_csv, nome_tabela, chunksize=10000):
+        """
+        INSERÇÃO COM to_sql: Método mais eficiente para grandes volumes
+        - Processa o CSV em chunks (blocos) para não sobrecarregar memória
+        - Usa pandas.to_sql() que é otimizado para inserções em lote
+        - Ideal para arquivos com até 10.000 linhas
+        """
+        try:
+            logger.info(f'📥 Inserindo dados na tabela {nome_tabela} usando to_sql...')
+            total_linhas = 0
+            
+            # Processar arquivo em chunks (blocos) de 10.000 linhas
+            for numero_chunk, chunk in enumerate(pd.read_csv(arquivo_csv, chunksize=chunksize, low_memory=False)):
+                # Limpar nomes das colunas
+                chunk.columns = [col.replace(' ', '_').replace('-', '_').replace('.', '_').lower() for col in chunk.columns]
+                
+                # Inserir chunk no banco
+                chunk.to_sql(
+                    name=nome_tabela.lower(),
+                    con=self.engine,
+                    if_exists='append',  # Adiciona aos dados existentes
+                    index=False,         # Não incluir índice do pandas
+                    chunksize=1000,      # Inserir em lotes de 1000 registros
+                    method='multi'       # Método multi para eficiência
+                )
+                
+                total_linhas += len(chunk)
+                logger.info(f"Chunk {numero_chunk + 1}: {len(chunk)} linhas inseridas")
+            
+            logger.info(f"✅ Total de {total_linhas} linhas inseridas com to_sql!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao inserir dados com to_sql: {e}")
+            return False
+    
+    def inserir_dados_execute(self, arquivo_csv, nome_tabela):
+        """
+        INSERÇÃO COM EXECUTE: Método tradicional linha por linha
+        - Mais lento mas mais controle sobre cada inserção
+        - Útil para arquivos pequenos ou quando precisa de validação específica
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Ler todo o arquivo (para arquivos menores)
+            logger.info(f"Lendo arquivo {arquivo_csv}...")
+            dados_csv = pd.read_csv(arquivo_csv)
+            dados_csv.columns = [col.replace(' ', '_').replace('-', '_').replace('.', '_').lower() for col in dados_csv.columns]
+            
+            logger.info(f'📥 Inserindo {len(dados_csv)} linhas na tabela {nome_tabela}...')
+            
+            # Preparar SQL de inserção
+            colunas = dados_csv.columns.tolist()
+            placeholders = ', '.join([f':{i+1}' for i in range(len(colunas))])
+            sql_insercao = f"INSERT INTO {nome_tabela} ({', '.join(colunas)}) VALUES ({placeholders})"
+            
+            # Inserir linha por linha
+            linhas_inseridas = 0
+            for i, linha in dados_csv.iterrows():
+                cursor.execute(sql_insercao, tuple(linha))
+                linhas_inseridas += 1
+                
+                # Commit a cada 1000 linhas para não sobrecarregar
+                if linhas_inseridas % 1000 == 0:
+                    self.conn.commit()
+                    logger.info(f"{linhas_inseridas} linhas inseridas...")
+            
+            # Commit final
+            self.conn.commit()
+            logger.info(f"✅ {linhas_inseridas} linhas inseridas com execute!")
+            cursor.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao inserir dados com execute: {e}")
+            return False
+    
+    def processar_arquivo_unico(self, caminho_arquivo, nome_tabela=None, metodo='to_sql'):
+        """
+        PROCESSAR ARQUIVO: Orquestra todo o processo para um arquivo
+        - Cria tabela se não existir
+        - Insere dados usando método escolhido
+        - Move arquivo processado
+        """
+        if not nome_tabela:
+            # Gerar nome da tabela do nome do arquivo
+            nome_base = os.path.splitext(os.path.basename(caminho_arquivo))[0]
+            nome_tabela = nome_base.replace('-', '_').replace(' ', '_').lower()
+        
+        logger.info(f"\n{'='*50}")
+        logger.info(f"📁 Processando: {os.path.basename(caminho_arquivo)}")
+        logger.info(f"📊 Tabela: {nome_tabela}")
+        logger.info(f"⚡ Método: {metodo}")
+        logger.info(f"{'='*50}")
+        
+        try:
+            # Etapa 1: Criar tabela
+            if not self.criar_tabela_do_csv(caminho_arquivo, nome_tabela):
+                return False
+            
+            # Etapa 2: Inserir dados
+            if metodo == 'to_sql':
+                sucesso = self.inserir_dados_to_sql(caminho_arquivo, nome_tabela, CHUNKSIZE)
+            else:
+                sucesso = self.inserir_dados_execute(caminho_arquivo, nome_tabela)
+            
+            if sucesso:
+                logger.info(f"✅ Arquivo processado com sucesso!")
+                # Etapa 3: Mover arquivo processado
+                self._mover_arquivo_processado(caminho_arquivo)
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar arquivo: {e}")
+            return False
+    
+    def processar_pasta(self, pasta_arquivos, metodo='to_sql'):
+        """
+        PROCESSAR PASTA: Processa todos os arquivos CSV de uma pasta
+        - Encontra todos os arquivos .csv
+        - Processa um por um
+        - Retorna relatório final
+        """
+        if not self.connect():
+            logger.error("❌ Não foi possível conectar ao banco!")
+            return False
+        
+        try:
+            # Verificar se pasta existe
+            if not os.path.exists(pasta_arquivos):
+                logger.error(f"❌ Pasta não encontrada: {pasta_arquivos}")
+                return False
+            
+            # Encontrar arquivos CSV
+            arquivos_csv = glob.glob(os.path.join(pasta_arquivos, "*.csv"))
+            
+            if not arquivos_csv:
+                logger.warning("⚠️ Nenhum arquivo CSV encontrado na pasta!")
+                return True
+            
+            logger.info(f"📁 Encontrados {len(arquivos_csv)} arquivos CSV")
+            
+            # Processar cada arquivo
+            sucessos = 0
+            for arquivo_csv in arquivos_csv:
+                if self.processar_arquivo_unico(arquivo_csv, metodo=metodo):
+                    sucessos += 1
+            
+            # Relatório final
+            logger.info(f"\n{'='*50}")
+            logger.info("📊 RELATÓRIO FINAL")
+            logger.info(f"✅ Arquivos processados com sucesso: {sucessos}/{len(arquivos_csv)}")
+            logger.info(f"{'='*50}")
+            
+            return sucessos == len(arquivos_csv)
+            
+        finally:
+            self.disconnect()
+    
+    def _mover_arquivo_processado(self, caminho_arquivo):
+        """
+        MOVER ARQUIVO: Move arquivo processado para pasta de backup
+        - Evita reprocessamento
+        - Mantém histórico
+        """
+        try:
+            pasta_processados = "processados"
+            if not os.path.exists(pasta_processados):
+                os.makedirs(pasta_processados)
+            
+            nome_arquivo = os.path.basename(caminho_arquivo)
+            novo_caminho = os.path.join(pasta_processados, nome_arquivo)
+            
+            # Adicionar timestamp para evitar sobrescrita
+            base, ext = os.path.splitext(novo_caminho)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            novo_caminho = f"{base}_{timestamp}{ext}"
+            
+            os.rename(caminho_arquivo, novo_caminho)
+            logger.info(f"📦 Arquivo movido para: {novo_caminho}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível mover arquivo: {e}")
+
+
+# =============================================
+# EXECUÇÃO PRINCIPAL
+# =============================================
+
+def main():
+    """
+    FUNÇÃO PRINCIPAL: Ponto de entrada do programa
+    - Usa as configurações definidas no topo do arquivo
+    - Processa todos os arquivos da pasta especificada
+    """
+    logger.info("🚀 Iniciando processamento de arquivos CSV para Oracle")
+    
+    # Validar configurações
+    if ORACLE_CONNECTION == "usuario/senha@localhost:1521/app1mf004h":
+        logger.error("❌ ERRO: Configure a string de conexão Oracle no topo do arquivo!")
+        return
+    
+    if PASTA_ARQUIVOS == "C:/caminho/para/sua/pasta/arquivos":
+        logger.error("❌ ERRO: Configure o caminho da pasta de arquivos no topo do arquivo!")
+        return
+    
+    # Inicializar e executar
+    loader = OracleCSVLoader(ORACLE_CONNECTION)
+    sucesso = loader.processar_pasta(PASTA_ARQUIVOS, metodo=METODO_INSERCAO)
+    
+    if sucesso:
+        logger.info("🎉 Processamento concluído com sucesso!")
+    else:
+        logger.error("💥 Ocorreram erros durante o processamento.")
+
+
+if __name__ == "__main__":
+    main()
