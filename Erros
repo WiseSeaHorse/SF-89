@@ -1,0 +1,127 @@
+import os
+import pandas as pd
+import oracledb
+import re
+
+# Configurações do Oracle Database
+ORACLE_HOST = "localhost:1522/XEPDB1"
+ORACLE_PORT = "1522"
+ORACLE_SERVICE = "XEPDB1"
+ORACLE_USER = "custodia"
+ORACLE_PASSWORD = "MVPCustodia2025"
+
+
+def find_csv_files():
+    return [f for f in os.listdir('.') if f.endswith('.csv')]
+
+
+def clean_name(name):
+    name = str(name).lower().replace(' ', '_')
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    name = re.sub(r'_+', '_', name)
+    return name.strip('_')
+
+
+def get_oracle_datatype(dtype):
+    if 'int' in str(dtype) or 'float' in str(dtype):
+        return 'NUMBER'
+    elif 'datetime' in str(dtype):
+        return 'DATE'
+    else:
+        return 'VARCHAR2(4000)'
+
+
+def df_to_tuples(df):
+    """Converte DataFrame para lista de tuplas otimizada para grandes volumes"""
+    return [tuple(None if pd.isna(x) else x for x in row) for row in df.itertuples(index=False)]
+
+
+def import_csv_to_oracle():
+    csv_files = find_csv_files()
+    if not csv_files:
+        print("Nenhum CSV encontrado!")
+        return
+
+    # Criar diretório
+    dataset_dir = "datasets"
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    # Mover arquivos
+    for csv_file in csv_files:
+        os.rename(csv_file, os.path.join(dataset_dir, csv_file))
+
+    # Conectar ao Oracle
+    try:
+        connection = oracledb.connect(**ORACLE_CONFIG)
+        cursor = connection.cursor()
+    except Exception as e:
+        print(f"Erro de conexão: {e}")
+        return
+
+    # Processar cada CSV
+    for csv_file in csv_files:
+        file_path = os.path.join(dataset_dir, csv_file)
+        print(f"Processando: {csv_file}")
+
+        try:
+            # Ler CSV
+            try:
+                df = pd.read_csv(file_path)
+            except UnicodeDecodeError:
+                df = pd.read_csv(file_path, encoding='ISO-8859-1')
+
+            # Limpar nomes
+            table_name = clean_name(csv_file.replace('.csv', ''))
+            df.columns = [clean_name(col) for col in df.columns]
+
+            print(f"Linhas: {len(df):,}, Colunas: {len(df.columns)}")
+
+            # Criar schema
+            columns_schema = ', '.join(
+                [f'"{col}" {get_oracle_datatype(df[col].dtype)}' for col in df.columns]
+            )
+
+            # Dropar e criar tabela
+            cursor.execute(
+                f'BEGIN EXECUTE IMMEDIATE \'DROP TABLE "{table_name}"\'; EXCEPTION WHEN OTHERS THEN NULL; END;')
+            cursor.execute(f'CREATE TABLE "{table_name}" ({columns_schema})')
+            connection.commit()
+
+            # Inserir dados em lotes otimizados
+            data_tuples = df_to_tuples(df)
+            placeholders = ':' + \
+                ', :'.join([str(i+1) for i in range(len(df.columns))])
+            insert_sql = f'INSERT INTO "{table_name}" VALUES ({placeholders})'
+
+            # Lotes de 2000 linhas para melhor performance
+            batch_size = 2000
+            total_rows = len(data_tuples)
+
+            for i in range(0, total_rows, batch_size):
+                batch = data_tuples[i:i + batch_size]
+                cursor.executemany(insert_sql, batch)
+                connection.commit()
+                print(
+                    f"Progresso: {min(i + batch_size, total_rows):,}/{total_rows:,} linhas")
+
+            print(f" {csv_file} importado: {total_rows:,} linhas")
+
+        except Exception as e:
+            print(f"Erro em {csv_file}: {e}")
+            connection.rollback()
+
+    cursor.close()
+    connection.close()
+    print("Importação concluída!")
+
+
+if __name__ == "__main__":
+    import_csv_to_oracle()
+
+
+
+
+PS C:\Users\thatyane_soares> & C:/Users/thatyane_soares/AppData/Local/Programs/Python/Python314/python.exe "c:/Users/thatyane_soares/OneDrive - Sicredi/Documents/Projeto/app.py"
+2025-11-27 11:52:51,768 - INFO - Loader Oracle inicializado
+2025-11-27 11:52:51,769 - INFO - Tentando conectar ao Oracle...
+2025-11-27 11:52:51,773 - ERROR - Erro na conexão com Oracle: DPY-4018: cannot parse connect string "localhost:1522/XEPDB1:1522/XEPDB1"
