@@ -1,0 +1,348 @@
+import os
+import pandas as pd
+import oracledb
+import re
+import sys
+
+# Configurações do Oracle Database
+ORACLE_USER = "custodia"
+ORACLE_PASSWORD = "MVPCustodia2025"
+ORACLE_DSN = "localhost:1522/XEPDB1"
+
+# Pasta onde estão os arquivos CSV (altere conforme necessário)
+CSV_FOLDER = r"C:\Users\thatyane_soares\OneDrive - Sicredi\Documents\Projeto\csv_files"
+
+def setup_oracle_client():
+    """Configura o Oracle Client ou usa modo thin"""
+    try:
+        # Tentar usar modo thin (não precisa de Oracle Client)
+        oracledb.init_oracle_client(lib_dir=None)  # Modo thin
+        print("✅ Usando modo Thin (sem Oracle Client)")
+        return True
+    except:
+        try:
+            # Tentar localizar Oracle Client automaticamente
+            common_paths = [
+                r"C:\Oracle\instantclient_21_*",
+                r"C:\app\client\*",
+                r"C:\oracle\instantclient_19_*",
+                r"C:\instantclient_*",
+                os.path.join(os.environ.get('ORACLE_HOME', ''), 'bin'),
+                os.environ.get('TNS_ADMIN', '')
+            ]
+            
+            for path_pattern in common_paths:
+                try:
+                    import glob
+                    paths = glob.glob(path_pattern)
+                    for path in paths:
+                        if os.path.isdir(path):
+                            oracledb.init_oracle_client(lib_dir=path)
+                            print(f"✅ Oracle Client encontrado em: {path}")
+                            return True
+                except:
+                    continue
+            
+            print("⚠️  Oracle Client não encontrado, usando modo Thin")
+            return True
+        except Exception as e:
+            print(f"⚠️  Erro ao configurar Oracle Client: {e}")
+            return True  # Continuar com modo thin
+
+def find_csv_files(folder_path):
+    """Encontra todos os arquivos CSV na pasta especificada"""
+    csv_files = []
+    try:
+        for file in os.listdir(folder_path):
+            if file.lower().endswith('.csv'):
+                csv_files.append(file)
+        print(f"Encontrados {len(csv_files)} arquivos CSV")
+        return csv_files
+    except Exception as e:
+        print(f"❌ Erro ao acessar pasta {folder_path}: {e}")
+        return []
+
+def clean_name(name):
+    name = str(name).lower().replace(' ', '_')
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    name = re.sub(r'_+', '_', name)
+    return name.strip('_')
+
+def get_oracle_datatype(col_name, dtype, sample_data=None):
+    dtype_str = str(dtype)
+    
+    if 'int' in dtype_str:
+        return 'NUMBER'
+    elif 'float' in dtype_str or 'double' in dtype_str:
+        return 'NUMBER(15,6)'
+    elif 'datetime' in dtype_str or 'timestamp' in dtype_str:
+        return 'DATE'
+    elif 'bool' in dtype_str:
+        return 'CHAR(1)'
+    elif 'object' in dtype_str:
+        # Para colunas com menos de 32 caracteres no nome, assumir que são códigos
+        if len(col_name) <= 32 and sample_data is not None:
+            try:
+                if sample_data.dropna().empty:
+                    return 'VARCHAR2(100)'
+                # Verificar se parece ser código (apenas números e letras, tamanho limitado)
+                sample_str = sample_data.astype(str).iloc[0] if len(sample_data) > 0 else ''
+                if len(sample_str) <= 50 and re.match(r'^[A-Za-z0-9_-]+$', sample_str):
+                    return 'VARCHAR2(100)'
+            except:
+                pass
+        
+        # Para texto normal
+        if sample_data is not None and hasattr(sample_data, 'str'):
+            try:
+                max_len = sample_data.str.len().max()
+                if pd.isna(max_len) or max_len < 1:
+                    return 'VARCHAR2(500)'
+                # Adicionar margem de segurança
+                calculated_len = min(int(max_len) * 2, 4000)
+                return f'VARCHAR2({calculated_len})'
+            except:
+                return 'VARCHAR2(500)'
+        return 'VARCHAR2(500)'
+    else:
+        return 'VARCHAR2(500)'
+
+def df_to_tuples(df):
+    """Converte DataFrame para lista de tuplas otimizada para grandes volumes"""
+    return [tuple(None if pd.isna(x) else x for x in row) for row in df.itertuples(index=False)]
+
+def test_oracle_connection():
+    """Testa a conexão com o Oracle"""
+    try:
+        # Primeiro configurar o client
+        if not setup_oracle_client():
+            return False
+            
+        print(f"🔗 Tentando conectar: {ORACLE_USER}@{ORACLE_DSN}")
+        
+        # Tentar com diferentes opções
+        try:
+            connection = oracledb.connect(
+                user=ORACLE_USER,
+                password=ORACLE_PASSWORD,
+                dsn=ORACLE_DSN
+            )
+        except:
+            # Tentar formato alternativo
+            connection = oracledb.connect(
+                user=ORACLE_USER,
+                password=ORACLE_PASSWORD,
+                host="localhost",
+                port=1522,
+                service_name="XEPDB1"
+            )
+        
+        cursor = connection.cursor()
+        cursor.execute("SELECT 'Conexão OK' FROM DUAL")
+        result = cursor.fetchone()
+        print(f"✅ {result[0]}")
+        
+        # Testar versão do Oracle
+        cursor.execute("SELECT * FROM v$version WHERE rownum = 1")
+        version = cursor.fetchone()
+        print(f"📊 Oracle Version: {version[0]}")
+        
+        cursor.close()
+        connection.close()
+        return True
+        
+    except oracledb.Error as e:
+        error, = e.args
+        print(f"❌ Erro Oracle: {error.code} - {error.message}")
+        
+        # Diagnóstico do erro
+        if error.code == 12541:  # TNS:no listener
+            print("💡 Problema: Listener do Oracle não está rodando na porta 1522")
+            print("💡 Solução: Verifique se o Oracle Database está iniciado")
+        elif error.code == 12154:  # TNS:could not resolve the connect identifier
+            print("💡 Problema: Nome do serviço não reconhecido")
+            print("💡 Solução: Verifique se o service_name está correto")
+        elif error.code == 1017:  # invalid username/password
+            print("💡 Problema: Usuário ou senha incorretos")
+        else:
+            print(f"💡 Código de erro: {error.code}")
+        
+        return False
+    except Exception as e:
+        print(f"❌ Erro geral: {e}")
+        return False
+
+def import_csv_to_oracle():
+    # Configurar Oracle Client primeiro
+    setup_oracle_client()
+    
+    # Verificar se pasta existe
+    if not os.path.exists(CSV_FOLDER):
+        print(f"❌ Pasta não encontrada: {CSV_FOLDER}")
+        print(f"💡 Crie a pasta ou ajuste o caminho no código")
+        return
+    
+    csv_files = find_csv_files(CSV_FOLDER)
+    if not csv_files:
+        print("❌ Nenhum CSV encontrado!")
+        return
+
+    # Testar conexão primeiro
+    if not test_oracle_connection():
+        print("\n🚨 Não foi possível conectar ao Oracle Database")
+        print("📋 Verifique:")
+        print("   1. Oracle Database está rodando")
+        print("   2. Listener está ativo na porta 1522")
+        print("   3. Service Name está correto")
+        print("   4. Usuário/senha estão corretos")
+        print("   5. Firewall permite conexão na porta 1522")
+        return
+
+    # Conectar ao Oracle
+    try:
+        connection = oracledb.connect(
+            user=ORACLE_USER,
+            password=ORACLE_PASSWORD,
+            dsn=ORACLE_DSN
+        )
+        cursor = connection.cursor()
+        print("✅ Conectado ao Oracle Database")
+    except Exception as e:
+        print(f"❌ Erro de conexão: {e}")
+        return
+
+    # Processar cada CSV
+    for csv_file in csv_files:
+        file_path = os.path.join(CSV_FOLDER, csv_file)
+        print(f"\n📁 Processando: {csv_file}")
+        print(f"📂 Caminho: {file_path}")
+
+        try:
+            # Ler CSV - tentar diferentes métodos
+            df = None
+            encodings = ['utf-8', 'ISO-8859-1', 'latin1', 'cp1252']
+            
+            for encoding in encodings:
+                try:
+                    df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
+                    print(f"✅ Arquivo lido com encoding: {encoding}")
+                    break
+                except:
+                    continue
+            
+            if df is None:
+                print(f"❌ Não foi possível ler o arquivo {csv_file}")
+                continue
+            
+            # Verificar se DataFrame não está vazio
+            if df.empty:
+                print(f"⚠️  Arquivo vazio: {csv_file}")
+                continue
+
+            # Limpar nomes
+            original_filename = csv_file
+            table_name = clean_name(csv_file.replace('.csv', '').replace('.CSV', ''))
+            df.columns = [clean_name(col) for col in df.columns]
+
+            print(f"📊 Linhas: {len(df):,}, Colunas: {len(df.columns)}")
+            print(f"📋 Tabela: {table_name}")
+            
+            # Mostrar primeiras colunas
+            print(f"🔤 Primeiras colunas: {list(df.columns[:5])}...")
+
+            # Criar schema com tipos mais precisos
+            columns_schema = []
+            for col in df.columns:
+                sample_data = df[col] if df[col].dtype == 'object' else None
+                oracle_type = get_oracle_datatype(col, df[col].dtype, sample_data)
+                columns_schema.append(f'"{col}" {oracle_type}')
+            
+            columns_schema_str = ', '.join(columns_schema)
+
+            # Dropar tabela se existir
+            try:
+                cursor.execute(f'BEGIN EXECUTE IMMEDIATE \'DROP TABLE "{table_name}" CASCADE CONSTRAINTS\'; EXCEPTION WHEN OTHERS THEN NULL; END;')
+                connection.commit()
+                print(f"🗑️  Tabela removida (se existia): {table_name}")
+            except Exception as e:
+                connection.rollback()
+                print(f"📋 Criando nova tabela: {table_name}")
+
+            # Criar tabela
+            try:
+                cursor.execute(f'CREATE TABLE "{table_name}" ({columns_schema_str})')
+                connection.commit()
+                print(f"✅ Tabela criada: {table_name}")
+            except Exception as e:
+                print(f"❌ Erro ao criar tabela: {e}")
+                print(f"💡 SQL: CREATE TABLE \"{table_name}\" ({columns_schema_str})")
+                continue
+
+            # Inserir dados em lotes
+            print("📥 Inserindo dados...")
+            
+            # Preparar dados
+            data_tuples = df_to_tuples(df)
+            placeholders = ', '.join([':' + str(i+1) for i in range(len(df.columns))])
+            insert_sql = f'INSERT INTO "{table_name}" VALUES ({placeholders})'
+
+            # Lotes de 500 linhas para evitar memory errors
+            batch_size = 500
+            total_rows = len(data_tuples)
+            inserted_rows = 0
+            start_time = pd.Timestamp.now()
+
+            for i in range(0, total_rows, batch_size):
+                batch = data_tuples[i:i + batch_size]
+                try:
+                    cursor.executemany(insert_sql, batch)
+                    connection.commit()
+                    inserted_rows += len(batch)
+                    
+                    # Mostrar progresso a cada 10%
+                    progress_percent = (i + batch_size) / total_rows * 100
+                    if progress_percent % 10 <= (batch_size / total_rows * 100):
+                        elapsed = (pd.Timestamp.now() - start_time).seconds
+                        print(f"📈 {progress_percent:.0f}% ({i+batch_size:,}/{total_rows:,}) - {elapsed}s")
+                        
+                except Exception as batch_error:
+                    print(f"⚠️  Erro no lote {i//batch_size + 1}: {batch_error}")
+                    # Tentar inserir linha por linha
+                    successful_in_batch = 0
+                    for j, row in enumerate(batch):
+                        try:
+                            cursor.execute(insert_sql, row)
+                            successful_in_batch += 1
+                        except Exception as row_error:
+                            if j == 0:  # Mostrar apenas primeiro erro
+                                print(f"❌ Erro na linha {i+j+1}: {row_error}")
+                    connection.commit()
+                    inserted_rows += successful_in_batch
+
+            elapsed_time = (pd.Timestamp.now() - start_time).seconds
+            print(f"✅ {original_filename} importado: {inserted_rows:,}/{total_rows:,} linhas em {elapsed_time}s")
+
+        except Exception as e:
+            print(f"❌ Erro ao processar {csv_file}: {e}")
+            import traceback
+            traceback.print_exc()
+            connection.rollback()
+
+    cursor.close()
+    connection.close()
+    print("\n🎉 Importação concluída!")
+    print(f"📊 Total de arquivos processados: {len(csv_files)}")
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("🚀 SISTEMA DE IMPORTAÇÃO CSV PARA ORACLE DATABASE")
+    print("=" * 60)
+    print(f"📁 Pasta CSV: {CSV_FOLDER}")
+    print(f"👤 Usuário Oracle: {ORACLE_USER}")
+    print(f"🌐 DSN: {ORACLE_DSN}")
+    print("=" * 60)
+    
+    import_csv_to_oracle()
+    
+    print("\n✅ Processo finalizado!")
+    input("Pressione Enter para sair...")
