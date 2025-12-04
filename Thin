@@ -1,162 +1,223 @@
-                O erro "connection refused" ao tentar ssh localhost indica que o cliente SSH está instalado, mas o servidor SSH não está rodando. Vamos diagnosticar e resolver:
+import os
+import pandas as pd
+import oracledb
+import re
 
-1. Entendendo o Problema
+print("INICIANDO IMPORTADOR CSV PARA ORACLE")
+print("=" * 50)
 
-· ✅ Cliente SSH: Instalado (por isso o comando ssh funciona)
-· ❌ Servidor SSH: Não está rodando ou não está instalado
-· Isso é normal - a maioria dos Windows só tem o cliente, não o servidor
+# Configurações
+ORACLE_USER = "custodia"
+ORACLE_PASSWORD = "MVPCustodia2025"
+ORACLE_DSN = "localhost:1522/XEPDB1"
+CSV_FOLDER = "C:/Users/thatyane_soares/OneDrive - Sicredi/Documents/Projeto/csv_files"
 
-2. Verificar se Servidor SSH está Instalado
+print(f"Usuario: {ORACLE_USER}")
+print(f"DSN: {ORACLE_DSN}")
+print(f"Pasta CSV: {CSV_FOLDER}")
+print("-" * 30)
 
-PowerShell:
+def test_oracle_connection():
+    print("Testando conexao com Oracle...")
+    try:
+        connection = oracledb.connect(
+            user=ORACLE_USER,
+            password=ORACLE_PASSWORD,
+            dsn=ORACLE_DSN
+        )
+        cursor = connection.cursor()
+        cursor.execute("SELECT 'Conexao OK' FROM DUAL")
+        result = cursor.fetchone()
+        cursor.close()
+        connection.close()
+        print(f"Conexao bem sucedida: {result[0]}")
+        return True
+    except Exception as e:
+        print(f"Falha na conexao: {e}")
+        return False
 
-```powershell
-# Verificar feature do servidor
-Get-WindowsOptionalFeature -Online | Where-Object {$_.FeatureName -like "*SSH*Server*"}
+def clean_name(name):
+    name = str(name).lower().replace(' ', '_')
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    name = re.sub(r'_+', '_', name)
+    return name.strip('_')
 
-# Ou
-Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
-```
+def get_oracle_datatype(dtype, sample_data=None):
+    dtype_str = str(dtype)
+    
+    if 'int' in dtype_str:
+        return 'NUMBER'
+    elif 'float' in dtype_str:
+        return 'NUMBER(15,6)'
+    elif 'datetime' in dtype_str:
+        return 'DATE'
+    elif 'object' in dtype_str:
+        if sample_data is not None and hasattr(sample_data, 'str'):
+            max_len = sample_data.str.len().max()
+            if pd.isna(max_len) or max_len < 1:
+                return 'VARCHAR2(500)'
+            return f'VARCHAR2({min(int(max_len) * 2, 4000)})'
+        return 'VARCHAR2(500)'
+    else:
+        return 'VARCHAR2(500)'
 
-CMD:
+def import_csv_to_oracle():
+    # Verificar pasta
+    if not os.path.exists(CSV_FOLDER):
+        print(f"ERRO: Pasta nao encontrada: {CSV_FOLDER}")
+        return
+    
+    # Buscar arquivos CSV
+    csv_files = []
+    for file in os.listdir(CSV_FOLDER):
+        if file.lower().endswith('.csv'):
+            csv_files.append(file)
+    
+    print(f"Arquivos CSV encontrados: {len(csv_files)}")
+    for file in csv_files:
+        print(f"  - {file}")
+    
+    if not csv_files:
+        print("Nenhum arquivo CSV encontrado para importar")
+        return
+    
+    # Testar conexao
+    if not test_oracle_connection():
+        print("Importacao cancelada - problemas de conexao")
+        return
+    
+    # Conectar ao Oracle
+    print("Conectando ao Oracle Database...")
+    try:
+        connection = oracledb.connect(
+            user=ORACLE_USER,
+            password=ORACLE_PASSWORD,
+            dsn=ORACLE_DSN
+        )
+        cursor = connection.cursor()
+        print("Conexao estabelecida com sucesso")
+    except Exception as e:
+        print(f"Erro de conexao: {e}")
+        return
+    
+    # Processar cada arquivo
+    print("\nPROCESSANDO ARQUIVOS:")
+    print("=" * 50)
+    
+    total_success = 0
+    total_failed = 0
+    
+    for csv_file in csv_files:
+        print(f"\nProcessando: {csv_file}")
+        file_path = os.path.join(CSV_FOLDER, csv_file)
+        
+        try:
+            # Ler CSV
+            print("  Lendo arquivo...")
+            try:
+                df = pd.read_csv(file_path, low_memory=False)
+            except UnicodeDecodeError:
+                df = pd.read_csv(file_path, encoding='ISO-8859-1', low_memory=False)
+            
+            if df.empty:
+                print("  AVISO: Arquivo vazio - ignorando")
+                total_failed += 1
+                continue
+            
+            print(f"  Linhas: {len(df):,}, Colunas: {len(df.columns)}")
+            
+            # Preparar nome da tabela
+            table_name = clean_name(csv_file.replace('.csv', ''))
+            df.columns = [clean_name(col) for col in df.columns]
+            
+            # Criar schema
+            print("  Criando schema da tabela...")
+            columns_schema = []
+            for col in df.columns:
+                sample_data = df[col] if df[col].dtype == 'object' else None
+                oracle_type = get_oracle_datatype(df[col].dtype, sample_data)
+                columns_schema.append(f'"{col}" {oracle_type}')
+            
+            # Dropar tabela se existir
+            try:
+                cursor.execute(f'DROP TABLE "{table_name}"')
+                connection.commit()
+                print(f"  Tabela existente removida: {table_name}")
+            except:
+                connection.rollback()
+            
+            # Criar tabela
+            columns_schema_str = ', '.join(columns_schema)
+            cursor.execute(f'CREATE TABLE "{table_name}" ({columns_schema_str})')
+            connection.commit()
+            print(f"  Tabela criada: {table_name}")
+            
+            # Preparar dados para insercao
+            print("  Preparando dados para insercao...")
+            data_tuples = []
+            for row in df.itertuples(index=False):
+                cleaned_row = []
+                for value in row:
+                    cleaned_row.append(None if pd.isna(value) else value)
+                data_tuples.append(tuple(cleaned_row))
+            
+            # Inserir dados
+            print("  Inserindo dados no banco...")
+            placeholders = ', '.join([':' + str(i+1) for i in range(len(df.columns))])
+            insert_sql = f'INSERT INTO "{table_name}" VALUES ({placeholders})'
+            
+            batch_size = 1000
+            total_rows = len(data_tuples)
+            inserted_rows = 0
+            
+            for i in range(0, total_rows, batch_size):
+                batch = data_tuples[i:i + batch_size]
+                try:
+                    cursor.executemany(insert_sql, batch)
+                    connection.commit()
+                    inserted_rows += len(batch)
+                except Exception as batch_error:
+                    print(f"  Erro no lote: {batch_error}")
+                    connection.rollback()
+                    
+                    # Tentar linha por linha
+                    for row in batch:
+                        try:
+                            cursor.execute(insert_sql, row)
+                            inserted_rows += 1
+                        except:
+                            pass
+                    connection.commit()
+            
+            print(f"  Dados inseridos: {inserted_rows:,}/{total_rows:,} linhas")
+            
+            if inserted_rows > 0:
+                total_success += 1
+                print(f"  SUCESSO: {csv_file} importado")
+            else:
+                total_failed += 1
+                print(f"  FALHA: Nenhum dado inserido de {csv_file}")
+            
+        except Exception as e:
+            total_failed += 1
+            print(f"  ERRO ao processar {csv_file}: {e}")
+            connection.rollback()
+    
+    # Finalizacao
+    print("\n" + "=" * 50)
+    print("RESULTADO FINAL DA IMPORTACAO")
+    print("-" * 30)
+    print(f"Total de arquivos: {len(csv_files)}")
+    print(f"Importados com sucesso: {total_success}")
+    print(f"Falhas: {total_failed}")
+    
+    cursor.close()
+    connection.close()
+    print("Conexao com Oracle fechada")
 
-```cmd
-dism /online /get-features | findstr /i ssh
-```
-
-3. Habilitar Servidor SSH (Se Necessário)
-
-Se você realmente precisa do servidor SSH:
-
-```powershell
-# Como Administrador no PowerShell
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-
-# Iniciar e configurar
-Start-Service sshd
-Set-Service -Name sshd -StartupType 'Automatic'
-
-# Verificar status
-Get-Service sshd
-```
-
-4. Mas... Você Precisa Mesmo do Servidor SSH?
-
-Provavelmente NÃO. Você só precisa do cliente SSH para conectar a máquinas remotas.
-
-Para testar se o CLIENTE funciona:
-
-```powershell
-# Testar ajuda (funciona sem servidor)
-ssh -?
-
-# Tentar conectar em um host inexistente (testa apenas cliente)
-ssh usuario@host_inexistente.com
-
-# Você deve ver erro de "could not resolve hostname"
-# Isso prova que cliente funciona!
-```
-
-5. Teste Prático do Cliente SSH
-
-Crie este script teste_ssh.ps1:
-
-```powershell
-Write-Host "=== TESTE DE CLIENTE SSH ===" -ForegroundColor Cyan
-
-# 1. Verificar se cliente responde
-Write-Host "`n[1] Testando comando básico..." -ForegroundColor Yellow
-ssh -V 2>&1
-
-# 2. Testar ajuda
-Write-Host "`n[2] Testando ajuda (Ctrl+C para sair):" -ForegroundColor Yellow
-ssh -h | Select-Object -First 5
-
-# 3. Tentar conexão fake
-Write-Host "`n[3] Testando tentativa de conexão..." -ForegroundColor Yellow
-try {
-    ssh fakeuser@fakehost.fake 2>&1 | Select-Object -First 2
-    Write-Host "✅ Cliente SSH funcionando!" -ForegroundColor Green
-} catch {
-    Write-Host "✅ Cliente tenta executar!" -ForegroundColor Green
-}
-
-Write-Host "`nConclusão: Cliente SSH está instalado e funcionando." -ForegroundColor Cyan
-Write-Host "Para usar, conecte em um host REMOTO, não localhost." -ForegroundColor White
-```
-
-6. Como Usar o SSH para Conexão Remota
-
-Conexão básica:
-
-```powershell
-ssh seu_usuario@host_remoto_ou_ip
-```
-
-Com porta específica:
-
-```powershell
-ssh seu_usuario@host_remoto -p 2222
-```
-
-Para criar tunnel para Oracle:
-
-```powershell
-# Redireciona porta local 1521 para Oracle remoto
-ssh -L 1521:oracle_host:1521 seu_usuario@jump_host
-
-# Em outro terminal, conecte no localhost:
-sqlplus usuario/senha@localhost:1521/servicename
-```
-
-7. Configurar Chaves SSH (Opcional)
-
-```powershell
-# Gerar chaves (não requer servidor local)
-ssh-keygen -t rsa -b 4096 -C "seu_email@exemplo.com"
-
-# Verificar chaves geradas
-Get-ChildItem ~\.ssh\
-
-# Copiar chave pública para servidor remoto
-cat ~\.ssh\id_rsa.pub | ssh usuario@host_remoto "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
-```
-
-8. Verificar Firewall (Pode Bloquear)
-
-```powershell
-# Verificar regras de firewall
-Get-NetFirewallRule -DisplayName "*SSH*" | Format-Table DisplayName, Enabled
-
-# Se precisar criar regra (para servidor, não cliente)
-New-NetFirewallRule -DisplayName "SSH Port 22" -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow
-```
-
-9. Resumo Rápido
-
-1. "ssh localhost" deu erro? → Normal! Só cliente instalado
-2. Cliente funciona? → Sim! Teste com ssh -V
-3. Para que serve? → Conectar em servidores REMOTOS
-4. Precisa de servidor local? → Só se quiser receber conexões
-
-10. Próximos Passos para seu Caso Oracle
-
-Se você tem acesso SSH a um servidor intermediário:
-
-```powershell
-# 1. Criar tunnel
-ssh -N -L 1521:oracle_host_remoto:1521 usuario@servidor_intermediario
-
-# 2. Em outro terminal, conectar ao Oracle
-# Usando SQL Developer ou sqlplus apontando para localhost:1521
-```
-
-Conclusão:
-
-Seu SSH está funcionando perfeitamente para o que você precisa (conectar a servidores remotos). O erro "connection refused" no localhost é esperado e não impede conexões externas.
-
-Ação agora: Obtenha os dados de conexão SSH do servidor intermediário do banco e use:
-
-```bash
-ssh usuario@servidor_do_banco
-```
+if __name__ == "__main__":
+    print("\nIniciando processo de importacao...")
+    print("-" * 30)
+    import_csv_to_oracle()
+    print("\nProcesso finalizado")
+    print("=" * 50)
