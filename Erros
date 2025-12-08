@@ -1,7 +1,6 @@
 Extract: End of central directory record signature not found. Either not a zip file, or file is truncated., End of central directory record signature not found. Either not a zip file, or file is truncated.
 
 
-
 PS C:\Users\thatyane_soares>
 >> python -m pip install --upgrade pip
 >> python -m pip install vsixget --timeout 120 --retries 10 --default-timeout 120
@@ -14,3 +13,57 @@ tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
 WARNING: Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken
  by 'ConnectTimeoutError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x0000023F55398550>, 'Connec
 tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
+
+
+2025-12-08 18:22:33.627 [info] [Window] Started local extension host with pid 38908.
+2025-12-08 18:22:34.902 [info] [Window] MCP Registry configured: https://api.mcp.github.com
+2025-12-08 18:22:35.125 [info] [Window] Settings Sync: Account status changed from uninitialized to unavailable
+2025-12-08 18:22:35.301 [info] [Cloud Changes] Prompting to enable cloud changes, has application previously launched from Continue On flow: false
+2025-12-08 18:22:36.332 [info] [Window] [perf] Render performance baseline is 41ms
+2025-12-08 18:22:44.377 [warning] [Window] [ms-toolsai.vscode-jupyter-cell-tags]: View container 'jupyter-variables' does not exist and all views registered to it will be added to 'Explorer'.
+2025-12-08 18:24:25.396 [error] [Network] #8: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/dotjoshjohnson/xml/latest - error GET Canceled
+2025-12-08 18:24:25.397 [error] [Network] #9: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-azuretools/vscode-containers/latest - error GET Canceled
+2025-12-08 18:24:25.397 [error] [Network] #10: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/github/copilot/latest - error GET Canceled
+2025-12-08 18:24:25.400 [error] [Window] Cancelled: Canceled: Canceled
+    at lQe.L (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:35089)
+    at async lQe.K (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:33813)
+    at async lQe.C (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:24533)
+    at async vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:23898
+    at async Promise.all (index 0)
+    at async lQe.B (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:23852)
+    at async lQe.getExtensions (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:22509)
+    at async Vut.getExtensions (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2493:15152)
+    at async yQs.Rc (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2489:17026)
+    at async yQs.$c (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2489:19670)
+2025-12-08 18:25:05.104 [error] [Window] Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
+    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
+    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
+2025-12-08 18:25:05.113 [error] [Window] End of central directory record signature not found. Either not a zip file, or file is truncated.: Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
+    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
+    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
+2025-12-08 18:26:49.016 [error] [Window] Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
+    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
+    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
+2025-12-08 18:26:49.026 [error] [Window] End of central directory record signature not found. Either not a zip file, or file is truncated.: Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
+    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
+    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
+    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
