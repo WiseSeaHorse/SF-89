@@ -1,1 +1,16 @@
 Extract: End of central directory record signature not found. Either not a zip file, or file is truncated., End of central directory record signature not found. Either not a zip file, or file is truncated.
+
+
+
+PS C:\Users\thatyane_soares>
+>> python -m pip install --upgrade pip
+>> python -m pip install vsixget --timeout 120 --retries 10 --default-timeout 120
+>>
+Requirement already satisfied: pip in c:\users\thatyane_soares\appdata\local\anaconda3\lib\site-packages (25.1)
+
+WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken
+ by 'ConnectTimeoutError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x0000023F5526FA10>, 'Connec
+tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
+WARNING: Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken
+ by 'ConnectTimeoutError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x0000023F55398550>, 'Connec
+tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
