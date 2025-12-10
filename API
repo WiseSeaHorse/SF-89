@@ -1,0 +1,344 @@
+# **API Simples para Conectar ao Oracle da VM - Configuração Rápida no VSCode**
+
+Vou te mostrar o jeito mais direto e prático para criar uma API que conecta sua máquina local ao Oracle da VM.
+
+## **📌 PASSO 1: Configuração Rápida da VM (Oracle)**
+
+### **1.1 Permitir conexões externas no Oracle (Execute na VM):**
+```bash
+# Acesse o SQLPlus como administrador
+sqlplus / as sysdba
+```
+
+```sql
+-- Execute estes comandos SQL:
+ALTER SYSTEM SET LOCAL_LISTENER='(ADDRESS=(PROTOCOL=TCP)(HOST=0.0.0.0)(PORT=1521))' SCOPE=BOTH;
+ALTER SYSTEM REGISTER;
+EXIT;
+```
+
+### **1.2 Abrir a porta no firewall (Linux VM):**
+```bash
+# Execute na VM
+sudo firewall-cmd --permanent --add-port=1521/tcp
+sudo firewall-cmd --reload
+```
+
+### **1.3 Descobrir o IP da VM:**
+```bash
+ip addr show | grep inet
+# Anote o IP (geralmente começa com 192.168. ou 10.)
+```
+
+---
+
+## **📌 PASSO 2: Configuração no VSCode (Sua Máquina Local)**
+
+### **2.1 Abra o VSCode e crie uma pasta para o projeto**
+- `File` → `Open Folder` → Crie uma pasta nova
+
+### **2.2 Crie estes arquivos:**
+
+#### **Arquivo 1: `requirements.txt`**
+```txt
+fastapi==0.104.1
+uvicorn==0.24.0
+python-dotenv==1.0.0
+cx_Oracle==8.3.0
+```
+
+#### **Arquivo 2: `.env`** (configurações)
+```env
+# Substitua pelos seus dados
+ORACLE_HOST=192.168.1.100  # IP da sua VM
+ORACLE_PORT=1521
+ORACLE_SERVICE=ORCLCDB     # Nome do seu serviço Oracle
+ORACLE_USER=seu_usuario
+ORACLE_PASSWORD=sua_senha
+```
+
+#### **Arquivo 3: `main.py`** (API principal)
+```python
+from fastapi import FastAPI, HTTPException
+import cx_Oracle
+import os
+from dotenv import load_dotenv
+import uvicorn
+
+# Carrega variáveis do .env
+load_dotenv()
+
+app = FastAPI(title="API Oracle VM", version="1.0")
+
+def get_connection():
+    """Cria conexão com o Oracle da VM"""
+    try:
+        # Monta a string de conexão
+        dsn = cx_Oracle.makedsn(
+            os.getenv("ORACLE_HOST"),
+            os.getenv("ORACLE_PORT"),
+            service_name=os.getenv("ORACLE_SERVICE")
+        )
+        
+        # Conecta ao banco
+        connection = cx_Oracle.connect(
+            user=os.getenv("ORACLE_USER"),
+            password=os.getenv("ORACLE_PASSWORD"),
+            dsn=dsn
+        )
+        return connection
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na conexão: {str(e)}")
+
+@app.get("/")
+def home():
+    """Página inicial da API"""
+    return {
+        "message": "API Oracle VM Funcionando!",
+        "endpoints": {
+            "/teste-conexao": "Testa conexão com Oracle",
+            "/tables": "Lista tabelas do usuário",
+            "/query/{sql}": "Executa SQL (usar %20 para espaços)"
+        }
+    }
+
+@app.get("/teste-conexao")
+def teste_conexao():
+    """Testa se consegue conectar ao Oracle da VM"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 'Conexão OK!' as status FROM dual")
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "message": "Conexão com Oracle estabelecida com sucesso!",
+            "data": result[0]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Falha na conexão: {str(e)}",
+            "dica": "Verifique: 1) IP da VM, 2) Oracle rodando, 3) Firewall aberto"
+        }
+
+@app.get("/tables")
+def listar_tabelas():
+    """Lista todas as tabelas do usuário"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT table_name, num_rows 
+            FROM user_tables 
+            ORDER BY table_name
+        """)
+        
+        tabelas = []
+        for row in cursor:
+            tabelas.append({
+                "table_name": row[0],
+                "num_rows": row[1] if row[1] else 0
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "count": len(tabelas),
+            "tables": tabelas
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/query/{sql}")
+def executar_query(sql: str):
+    """Executa uma query SQL (use %20 para espaços na URL)"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Decodifica espaços (%20) e outros caracteres
+        import urllib.parse
+        sql_decoded = urllib.parse.unquote(sql)
+        
+        # Executa a query
+        cursor.execute(sql_decoded)
+        
+        # Pega nomes das colunas
+        col_names = [col[0] for col in cursor.description]
+        
+        # Pega resultados
+        results = []
+        for row in cursor:
+            results.append(dict(zip(col_names, row)))
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "query": sql_decoded,
+            "columns": col_names,
+            "results": results,
+            "row_count": len(results)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",  # Permite acesso de qualquer IP da rede
+        port=8000,
+        reload=True  # Reinicia automaticamente ao salvar
+    )
+```
+
+---
+
+## **📌 PASSO 3: Instalação e Execução no VSCode**
+
+### **3.1 Abra o terminal no VSCode:**
+- `Terminal` → `New Terminal`
+
+### **3.2 Instale as dependências:**
+```bash
+pip install -r requirements.txt
+```
+
+### **3.3 Configure o Instant Client (Obrigatório para Windows/Mac):**
+1. **Baixe o Oracle Instant Client:** https://www.oracle.com/database/technologies/instant-client/downloads.html
+2. **Escolha a versão básica (Basic)**
+3. **Extraia em:** `C:\oracle\instantclient` (Windows) ou `/opt/oracle/instantclient` (Linux/Mac)
+4. **Adicione ao PATH** ou configure no código:
+
+**Adicione no início do `main.py` (antes de importar cx_Oracle):**
+```python
+import os
+# Para Windows (ajuste o caminho)
+os.environ["PATH"] = r"C:\oracle\instantclient_21_12;" + os.environ["PATH"]
+
+# Para Linux/Mac
+# os.environ["LD_LIBRARY_PATH"] = "/opt/oracle/instantclient_21_12"
+```
+
+### **3.4 Execute a API:**
+```bash
+python main.py
+```
+
+Ou crie um arquivo `start.bat` (Windows) ou `start.sh` (Linux):
+```batch
+@echo off
+python main.py
+```
+
+---
+
+## **📌 PASSO 4: Testando a API**
+
+### **4.1 Acesse no navegador:**
+```
+http://localhost:8000
+```
+
+### **4.2 Teste a conexão:**
+```
+http://localhost:8000/teste-conexao
+```
+
+### **4.3 Veja as tabelas:**
+```
+http://localhost:8000/tables
+```
+
+### **4.4 Execute uma query:**
+```
+http://localhost:8000/query/SELECT%20*%20FROM%20dual
+```
+
+---
+
+## **📌 PASSO 5: Use a API no Seu Código (Exemplo)**
+
+### **Python:**
+```python
+import requests
+
+# Teste conexão
+response = requests.get("http://localhost:8000/teste-conexao")
+print(response.json())
+
+# Executa query
+query = "SELECT username FROM all_users"
+response = requests.get(f"http://localhost:8000/query/{query}")
+print(response.json())
+```
+
+### **JavaScript (Node.js):**
+```javascript
+const axios = require('axios');
+
+axios.get('http://localhost:8000/tables')
+  .then(response => console.log(response.data))
+  .catch(error => console.error(error));
+```
+
+---
+
+## **🔧 Solução de Problemas Comuns:**
+
+### **Erro: "DPI-1047: Cannot locate a 64-bit Oracle Client library"**
+- **Solução:** Instale o Oracle Instant Client (Passo 3.3)
+
+### **Erro: "Connection refused"**
+- **Solução:**
+  1. Verifique se a VM está ligada
+  2. Verifique o IP da VM: `ip addr show` (Linux) ou `ipconfig` (Windows)
+  3. Teste a porta: `telnet IP_DA_VM 1521`
+  4. Verifique firewall na VM
+
+### **Erro: "ORA-12541: TNS:no listener"**
+- **Solução:** Na VM, execute:
+  ```bash
+  lsnrctl start
+  ```
+
+---
+
+## **🎯 Estrutura Final do Projeto:**
+```
+meu-projeto-oracle/
+├── .env
+├── main.py
+├── requirements.txt
+├── start.bat (ou start.sh)
+└── README.md
+```
+
+## **💡 Dica Rápida:**
+Se precisar testar rapidamente sem criar API, use este código simples:
+
+```python
+import cx_Oracle
+import os
+
+# Configuração direta
+connection = cx_Oracle.connect(
+    user="seu_usuario",
+    password="sua_senha",
+    dsn="IP_DA_VM:1521/ORCLCDB"
+)
+
+cursor = connection.cursor()
+cursor.execute("SELECT * FROM dual")
+print(cursor.fetchall())
+```
+
+**Pronto!** Agora você tem uma API funcionando que conecta sua máquina local ao Oracle da VM. A API já está configurada para desenvolvimento no VSCode com hot-reload (atualiza automaticamente quando você salva).
