@@ -1,485 +1,100 @@
-import os
-import pandas as pd
-import oracledb
-import re
-import chardet
-from datetime import datetime
+SQL*Loader: Release 21.0.0.0.0 - Production on Fri Feb 13 10:52:21 2026
+Version 21.3.0.0.0
 
-# Configurações do Oracle Database
-ORACLE_USER = "custodia"
-ORACLE_PASSWORD = "MVPCustodia2025"
-ORACLE_DSN = "localhost:1522/XEPDB1"
+Copyright (c) 1982, 2021, Oracle and/or its affiliates.  All rights reserved.
 
-# Pasta onde estão os arquivos CSV
-CSV_FOLDER = "C:/Users/thatyane_soares/OneDrive - Sicredi/Documents/Projeto/csv_files"
+Control File:   C:\Users\thatyane_soares\Documents\Projeto\CSV\_work\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt.ctl
+Character Set WE8MSWIN1252 specified for all input.
 
-def detect_encoding(file_path):
-    """Detecta a codificação do arquivo"""
-    with open(file_path, 'rb') as f:
-        raw_data = f.read(10000)  # Ler apenas os primeiros 10KB para detecção
-        result = chardet.detect(raw_data)
-        encoding = result['encoding']
-        confidence = result['confidence']
-        print(f"  Codificação detectada: {encoding} (confiança: {confidence:.2%})")
-        return encoding if confidence > 0.7 else 'ISO-8859-1'
+Data File:      C:\Users\thatyane_soares\Documents\Projeto\CSV\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt
+  Bad File:     C:\Users\thatyane_soares\Documents\Projeto\CSV\_logs\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt.bad
+  Discard File:  none specified
+ 
+ (Allow all discards)
 
-def find_csv_files(folder_path):
-    """Encontra todos os arquivos CSV na pasta especificada"""
-    csv_files = []
-    try:
-        for file in os.listdir(folder_path):
-            if file.lower().endswith('.csv'):
-                csv_files.append(file)
-        print(f"Encontrados {len(csv_files)} arquivos CSV")
-        return sorted(csv_files)
-    except Exception as e:
-        print(f"Erro ao acessar pasta {folder_path}: {e}")
-        return []
+Number to load: ALL
+Number to skip: 1
+Errors allowed: 100000
+Continuation:    none specified
+Path used:      Direct
+Silent options: FEEDBACK
+Table TESTE2_STAGING, loaded from every logical record.
+Insert option in effect for this table: APPEND
+TRAILING NULLCOLS option in effect
 
-def clean_name(name):
-    """Limpa nomes para serem compatíveis com Oracle"""
-    name = str(name).lower().replace(' ', '_')
-    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
-    name = re.sub(r'_+', '_', name)
-    return name.strip('_')
+   Column Name                  Position   Len  Term Encl Datatype
+------------------------------ ---------- ----- ---- ---- ---------------------
+DATA_IMPORTACAO                                           EXPRESSION
+    SQL string for column : "SYSDATE"
+USER_IMPORT                                               CONSTANT
+    Value is 'thatyane_soares'
+DATA_ARQUIVO_RECEBIMENTO                                  EXPRESSION
+    SQL string for column : "TO_DATE('2026-02-11 03:13:46', 'YYYY-MM-DD HH24:MI:SS')"
+"Codigo do Registrador"             FIRST  4000   ;  O(") CHARACTER            
+"Data de Vencimento"                 NEXT  4000   ;  O(") CHARACTER            
+"Codigo do Tipo do Ativo"            NEXT  4000   ;  O(") CHARACTER            
+"Ativo"                              NEXT  4000   ;  O(") CHARACTER            
+"Data da Emissao"                    NEXT  4000   ;  O(") CHARACTER            
+"Quantidade Depositada"              NEXT  4000   ;  O(") CHARACTER            
+"Quantidade Emitida"                 NEXT  4000   ;  O(") CHARACTER            
+"Valor Atual"                        NEXT  4000   ;  O(") CHARACTER            
+"Juros"                              NEXT  4000   ;  O(") CHARACTER            
+"Valor Total"                        NEXT  4000   ;  O(") CHARACTER            
+"Indicador de Registrador"           NEXT  4000   ;  O(") CHARACTER            
+"Código do Agente de Pagamento"       NEXT  4000   ;  O(") CHARACTER            
+"Valor Un. Emissao"                  NEXT  4000   ;  O(") CHARACTER            
+"Rentabilidade/Indexador/Taxa Flutuante"       NEXT  4000   ;  O(") CHARACTER            
+"% Indice/Taxa Flutuante"            NEXT  4000   ;  O(") CHARACTER            
+"Descricao do Indice (VCP)"          NEXT  4000   ;  O(") CHARACTER            
+"Tipo do Indice (VCP)"               NEXT  4000   ;  O(") CHARACTER            
+"Taxa de Juros/Spread"               NEXT  4000   ;  O(") CHARACTER            
+"Forma de Pagamento"                 NEXT  4000   ;  O(") CHARACTER            
+"Criterio de Juros"                  NEXT  4000   ;  O(") CHARACTER            
+"Valor Total Anterior"               NEXT  4000   ;  O(") CHARACTER            
+"Valor PU Anterior"                  NEXT  4000   ;  O(") CHARACTER            
+"Valor PU Atual"                     NEXT  4000   ;  O(") CHARACTER            
+"Data da Curva"                      NEXT  4000   ;  O(") CHARACTER            
+"Condicao de Resgate Antecipado"       NEXT  4000   ;  O(") CHARACTER            
+"Juros Vencimento"                   NEXT  4000   ;  O(") CHARACTER            
+"Valor Total Vencimento"             NEXT  4000   ;  O(") CHARACTER            
+"Tipo de Regime"                     NEXT  4000   ;  O(") CHARACTER            
+"Descricao Adicional"                NEXT  4000   ;  O(") CHARACTER            
 
-def get_oracle_datatype(dtype, sample_data=None):
-    """Determina o tipo de dados Oracle baseado no pandas dtype"""
-    dtype_str = str(dtype)
-    
-    if 'int' in dtype_str:
-        return 'NUMBER'
-    elif 'float' in dtype_str:
-        return 'NUMBER(15,6)'
-    elif 'datetime' in dtype_str or 'timestamp' in dtype_str:
-        return 'DATE'
-    elif 'object' in dtype_str:
-        if sample_data is not None and hasattr(sample_data, 'str'):
-            try:
-                # Verificar se é realmente string
-                str_sample = sample_data.dropna().astype(str)
-                if len(str_sample) > 0:
-                    max_len = str_sample.str.len().max()
-                    if pd.isna(max_len) or max_len < 1:
-                        return 'VARCHAR2(500)'
-                    return f'VARCHAR2({min(int(max_len) * 2, 4000)})'
-            except:
-                pass
-        return 'VARCHAR2(500)'
-    else:
-        return 'VARCHAR2(500)'
+SQL*Loader-466: Column "Codigo do Registrador" does not exist in table TESTE2_STAGING.
 
-def format_df_for_display(df, max_rows=5, max_cols=10):
-    """Formata DataFrame para exibição no terminal"""
-    display_df = df.copy()
-    
-    # Limitar colunas se houver muitas
-    if len(df.columns) > max_cols:
-        display_df = display_df.iloc[:, :max_cols]
-        col_info = f"Mostrando {max_cols} de {len(df.columns)} colunas"
-    else:
-        col_info = f"Total de {len(df.columns)} colunas"
-    
-    # Limitar linhas
-    if len(df) > max_rows:
-        display_df = display_df.head(max_rows)
-        row_info = f"Mostrando {max_rows} de {len(df):,} linhas"
-    else:
-        row_info = f"Total de {len(df):,} linhas"
-    
-    return display_df, row_info, col_info
 
-def show_csv_preview(file_path, df, encoding_used):
-    """Mostra prévia detalhada do CSV"""
-    print(f"\n{'='*80}")
-    print(f"ARQUIVO: {os.path.basename(file_path)}")
-    print(f"{'='*80}")
-    print(f"Tamanho do arquivo: {os.path.getsize(file_path):,} bytes")
-    print(f"Codificação usada: {encoding_used}")
-    print(f"Shape: {df.shape[0]} linhas × {df.shape[1]} colunas")
-    
-    # Informações básicas
-    print(f"\nINFORMAÇÕES DO DATAFRAME:")
-    print(f"- Tipo de memória: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-    
-    # Tipos de dados
-    print(f"\nTIPOS DE DADOS (pandas):")
-    dtype_counts = df.dtypes.value_counts()
-    for dtype, count in dtype_counts.items():
-        print(f"  {dtype}: {count} coluna(s)")
-    
-    # Valores nulos
-    null_count = df.isnull().sum().sum()
-    null_percentage = (null_count / (df.shape[0] * df.shape[1])) * 100
-    print(f"\nVALORES NULOS:")
-    print(f"  Total: {null_count:,} ({null_percentage:.2f}%)")
-    
-    # Colunas com mais valores nulos
-    if null_count > 0:
-        null_cols = df.isnull().sum()
-        null_cols = null_cols[null_cols > 0]
-        print(f"  Colunas com valores nulos:")
-        for col, count in null_cols.head(5).items():
-            percentage = (count / len(df)) * 100
-            print(f"    {col}: {count:,} ({percentage:.2f}%)")
-    
-    # Amostra dos dados
-    print(f"\nPRÉVIA DOS DADOS:")
-    display_df, row_info, col_info = format_df_for_display(df)
-    
-    print(f"{row_info} | {col_info}")
-    print("-" * 80)
-    
-    # Configurar pandas para melhor exibição
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.width', None)
-    pd.set_option('display.max_colwidth', 30)
-    
-    print(display_df)
-    
-    # Informações das colunas
-    print(f"\nDETALHES DAS COLUNAS:")
-    for idx, col in enumerate(display_df.columns):
-        dtype = df[col].dtype if col in df.columns else 'unknown'
-        nunique = df[col].nunique() if col in df.columns else 0
-        nulls = df[col].isnull().sum() if col in df.columns else 0
-        print(f"  {idx+1:2d}. {col:30} | Tipo: {str(dtype):12} | "
-              f"Únicos: {nunique:6,} | Nulos: {nulls:6,}")
-
-def read_csv_with_auto_encoding(file_path):
-    """Lê CSV tentando diferentes codificações"""
-    encodings_to_try = []
-    
-    # Primeiro detectar codificação
-    detected = detect_encoding(file_path)
-    if detected:
-        encodings_to_try.append(detected)
-    
-    # Adicionar encodings comuns
-    common_encodings = ['utf-8', 'ISO-8859-1', 'cp1252', 'latin1']
-    for enc in common_encodings:
-        if enc not in encodings_to_try:
-            encodings_to_try.append(enc)
-    
-    # Tentar diferentes encodings
-    last_error = None
-    for encoding in encodings_to_try:
-        try:
-            print(f"  Tentando encoding: {encoding}")
-            df = pd.read_csv(
-                file_path,
-                encoding=encoding,
-                low_memory=False,
-                dtype=str,  # Primeiro ler tudo como string para evitar erros
-                on_bad_lines='skip'  # Pular linhas problemáticas
-            )
-            
-            # Tentar converter tipos de dados
-            df = auto_convert_dtypes(df)
-            
-            print(f"  ✓ Sucesso com encoding: {encoding}")
-            return df, encoding
-        except UnicodeDecodeError as e:
-            last_error = e
-            continue
-        except Exception as e:
-            last_error = e
-            continue
-    
-    raise Exception(f"Não foi possível ler o arquivo com nenhum encoding. Último erro: {last_error}")
-
-def auto_convert_dtypes(df):
-    """Tenta converter colunas para tipos de dados apropriados"""
-    for col in df.columns:
-        # Pular se já for convertido
-        if df[col].dtype != 'object':
-            continue
-            
-        # Tentar converter para datetime
-        try:
-            df[col] = pd.to_datetime(df[col], errors='ignore', dayfirst=True)
-            if df[col].dtype == 'datetime64[ns]':
-                continue
-        except:
-            pass
-        
-        # Tentar converter para numérico
-        try:
-            # Remover caracteres não numéricos
-            temp = df[col].replace({r'[^\d.,-]': ''}, regex=True)
-            temp = temp.replace({',': '.'}, regex=True)
-            converted = pd.to_numeric(temp, errors='coerce')
-            
-            # Se mais de 80% dos valores não-nulos foram convertidos
-            non_null = df[col].notnull()
-            if non_null.any():
-                conversion_rate = (converted.notnull() & non_null).sum() / non_null.sum()
-                if conversion_rate > 0.8:
-                    df[col] = converted
-        except:
-            pass
-        
-        # Limpar strings
-        try:
-            df[col] = df[col].astype(str).str.strip()
-        except:
-            pass
-    
-    return df
-
-def test_oracle_connection():
-    """Testa a conexão com o Oracle"""
-    try:
-        connection = oracledb.connect(
-            user=ORACLE_USER,
-            password=ORACLE_PASSWORD,
-            dsn=ORACLE_DSN
-        )
-        cursor = connection.cursor()
-        cursor.execute("SELECT 'Conexão OK' FROM DUAL")
-        result = cursor.fetchone()
-        print(f"\n✓ {result[0]}")
-        cursor.close()
-        connection.close()
-        return True
-    except Exception as e:
-        print(f"\n✗ Erro na conexão: {e}")
-        return False
-
-def import_csv_to_oracle():
-    """Função principal para importar CSVs para Oracle"""
-    
-    # Verificar se pasta existe
-    if not os.path.exists(CSV_FOLDER):
-        print(f"✗ Pasta não encontrada: {CSV_FOLDER}")
-        return
-    
-    csv_files = find_csv_files(CSV_FOLDER)
-    if not csv_files:
-        print("✗ Nenhum CSV encontrado!")
-        return
-    
-    print(f"\nArquivos encontrados:")
-    for i, file in enumerate(csv_files, 1):
-        print(f"  {i}. {file}")
-    
-    # Perguntar se deseja ver prévias primeiro
-    print(f"\n{'='*80}")
-    preview = input("Deseja ver prévias de todos os arquivos antes de importar? (S/N): ").strip().upper()
-    
-    all_dfs = {}
-    
-    # Primeiro ler todos os arquivos
-    for csv_file in csv_files:
-        file_path = os.path.join(CSV_FOLDER, csv_file)
-        print(f"\n{'='*80}")
-        print(f"LENDO: {csv_file}")
-        print(f"{'='*80}")
-        
-        try:
-            # Ler CSV com detecção de encoding
-            df, encoding_used = read_csv_with_auto_encoding(file_path)
-            
-            if df.empty:
-                print(f"⚠ Arquivo vazio: {csv_file}")
-                continue
-            
-            # Armazenar DataFrame
-            all_dfs[csv_file] = {
-                'df': df,
-                'encoding': encoding_used,
-                'path': file_path
-            }
-            
-            # Mostrar prévia se solicitado
-            if preview == 'S':
-                show_csv_preview(file_path, df, encoding_used)
-                
-                # Perguntar se deseja continuar após cada prévia
-                if csv_file != csv_files[-1]:
-                    cont = input(f"\nContinuar para próximo arquivo? (S/N): ").strip().upper()
-                    if cont != 'S':
-                        break
-                
-        except Exception as e:
-            print(f"✗ Erro ao ler {csv_file}: {e}")
-            continue
-    
-    if not all_dfs:
-        print("✗ Nenhum DataFrame válido para importar!")
-        return
-    
-    print(f"\n{'='*80}")
-    print(f"RESUMO DA LEITURA:")
-    print(f"{'='*80}")
-    
-    total_rows = 0
-    total_cols = 0
-    
-    for csv_file, data in all_dfs.items():
-        df = data['df']
-        rows, cols = df.shape
-        total_rows += rows
-        total_cols += cols
-        print(f"  {csv_file}: {rows:,} linhas × {cols} colunas ({data['encoding']})")
-    
-    print(f"\n  TOTAL: {len(all_dfs)} arquivos, {total_rows:,} linhas, {total_cols:,} colunas")
-    
-    # Confirmar importação
-    print(f"\n{'='*80}")
-    confirm = input("Deseja importar todos os arquivos para o Oracle? (S/N): ").strip().upper()
-    
-    if confirm != 'S':
-        print("Importação cancelada pelo usuário.")
-        return
-    
-    # Testar conexão com Oracle
-    if not test_oracle_connection():
-        return
-    
-    # Conectar ao Oracle
-    try:
-        connection = oracledb.connect(
-            user=ORACLE_USER,
-            password=ORACLE_PASSWORD,
-            dsn=ORACLE_DSN
-        )
-        cursor = connection.cursor()
-        print("✓ Conectado ao Oracle Database")
-    except Exception as e:
-        print(f"✗ Erro de conexão: {e}")
-        return
-    
-    # Processar cada DataFrame
-    for csv_file, data in all_dfs.items():
-        df = data['df']
-        file_path = data['path']
-        
-        print(f"\n{'='*80}")
-        print(f"IMPORTANDO: {csv_file}")
-        print(f"{'='*80}")
-        
-        try:
-            # Limpar nomes
-            table_name = clean_name(csv_file.replace('.csv', '').replace('.CSV', ''))
-            df.columns = [clean_name(col) for col in df.columns]
-            
-            # Garantir que os nomes das colunas são únicos
-            seen = {}
-            new_columns = []
-            for col in df.columns:
-                if col in seen:
-                    seen[col] += 1
-                    new_col = f"{col}_{seen[col]}"
-                    new_columns.append(new_col)
-                else:
-                    seen[col] = 0
-                    new_columns.append(col)
-            df.columns = new_columns
-            
-            print(f"  Nome da tabela: {table_name}")
-            print(f"  Colunas: {len(df.columns)}")
-            print(f"  Linhas: {len(df):,}")
-            
-            # Criar schema com tipos Oracle
-            columns_schema = []
-            for col in df.columns:
-                sample_data = df[col] if df[col].dtype == 'object' else None
-                oracle_type = get_oracle_datatype(df[col].dtype, sample_data)
-                columns_schema.append(f'"{col}" {oracle_type}')
-            
-            columns_schema_str = ', '.join(columns_schema)
-            
-            # Dropar tabela se existir
-            try:
-                cursor.execute(f'DROP TABLE "{table_name}" PURGE')
-                connection.commit()
-                print(f"  Tabela existente removida: {table_name}")
-            except Exception as e:
-                connection.rollback()
-                print(f"  Criando nova tabela: {table_name}")
-            
-            # Criar tabela
-            create_sql = f'CREATE TABLE "{table_name}" ({columns_schema_str})'
-            cursor.execute(create_sql)
-            connection.commit()
-            print(f"  Tabela criada: {table_name}")
-            
-            # Preparar dados para inserção
-            # Substituir NaN por None para Oracle
-            df = df.where(pd.notnull(df), None)
-            
-            # Converter para lista de tuplas
-            data_tuples = [tuple(x) for x in df.values]
-            
-            # Preparar SQL de inserção
-            placeholders = ', '.join([':' + str(i+1) for i in range(len(df.columns))])
-            insert_sql = f'INSERT INTO "{table_name}" VALUES ({placeholders})'
-            
-            # Inserir em lotes
-            batch_size = 1000
-            total_rows = len(data_tuples)
-            inserted_rows = 0
-            
-            print(f"  Iniciando inserção de {total_rows:,} linhas...")
-            
-            for i in range(0, total_rows, batch_size):
-                batch = data_tuples[i:i + batch_size]
-                try:
-                    cursor.executemany(insert_sql, batch)
-                    inserted_rows += len(batch)
-                    
-                    # Mostrar progresso a cada 10 lotes
-                    if (i // batch_size) % 10 == 0 or i + batch_size >= total_rows:
-                        progress = min(i + batch_size, total_rows)
-                        percent = (progress / total_rows) * 100
-                        print(f"  Progresso: {progress:,}/{total_rows:,} linhas ({percent:.1f}%)")
-                        
-                except Exception as batch_error:
-                    print(f"  ⚠ Erro no lote {i//batch_size + 1}: {batch_error}")
-                    # Tentar inserir linha por linha
-                    successful_in_batch = 0
-                    for row in batch:
-                        try:
-                            cursor.execute(insert_sql, row)
-                            successful_in_batch += 1
-                        except Exception as row_error:
-                            print(f"    Erro na linha: {row_error}")
-                    inserted_rows += successful_in_batch
-                
-                # Commit periódico
-                if i % (batch_size * 10) == 0 or i + batch_size >= total_rows:
-                    connection.commit()
-            
-            connection.commit()
-            print(f"  ✓ Importação concluída: {inserted_rows:,}/{total_rows:,} linhas inseridas")
-            
-        except Exception as e:
-            print(f"  ✗ Erro ao importar {csv_file}: {e}")
-            import traceback
-            traceback.print_exc()
-            connection.rollback()
-    
-    cursor.close()
-    connection.close()
-    
-    print(f"\n{'='*80}")
-    print("IMPORTAÇÃO CONCLUÍDA COM SUCESSO!")
-    print(f"{'='*80}")
-    
-    # Resumo final
-    print(f"\nRESUMO FINAL:")
-    print(f"- Arquivos processados: {len(all_dfs)}")
-    print(f"- Tabelas criadas: {len(all_dfs)}")
-    print(f"- Tempo: {datetime.now().strftime('%H:%M:%S')}")
-
-if __name__ == "__main__":
-    print("=" * 80)
-    print("IMPORTAÇÃO DE CSVs PARA ORACLE DATABASE")
-    print("=" * 80)
-    print(f"Pasta de origem: {CSV_FOLDER}")
-    print(f"Oracle Database: {ORACLE_DSN}")
-    print(f"Usuário: {ORACLE_USER}")
-    print("=" * 80)
-    
-    import_csv_to_oracle()
+modelo que está no oracle 
+DATA_IMPORTACAO	DATE	No	SYSDATE 
+USER_IMPORT	VARCHAR2(128 BYTE)	No	SYS_CONTEXT('USERENV','SESSION_USER') 
+ID_UNICO_ARQUIVO	NUMBER(10,0)	Yes
+DATA_ARQUIVO_RECEBIMENTO	DATE	Yes
+codigo_do_registrador	NUMBER	Yes
+data_de_vencimento	NUMBER	Yes
+codigo_do_tipo_do_ativo	VARCHAR2(3 BYTE)	Yes
+ativo	VARCHAR2(11 BYTE)	Yes
+data_da_emissao	NUMBER	Yes
+quantidade_depositada	NUMBER	Yes
+quantidade_emitida	NUMBER	Yes
+valor_atual	NUMBER	Yes
+juros	NUMBER	Yes
+valor_total	NUMBER	Yes
+indicador_de_registrador	VARCHAR2(50 BYTE)	Yes
+cdigo_do_agente_de_pagamento	VARCHAR2(50 BYTE)	Yes
+valor_un_emissao	NUMBER	Yes
+rentabilidadeindexadorta_b9928	VARCHAR2(9 BYTE)	Yes
+_indicetaxa_flutuante	NUMBER	Yes
+descricao_do_indice_vcp	VARCHAR2(50 BYTE)	Yes
+tipo_do_indice_vcp	VARCHAR2(50 BYTE)	Yes
+taxa_de_jurosspread	NUMBER	Yes
+forma_de_pagamento	VARCHAR2(44 BYTE)	Yes
+criterio_de_juros	VARCHAR2(78 BYTE)	Yes
+valor_total_anterior	NUMBER	Yes
+valor_pu_anterior	NUMBER	Yes
+valor_pu_atual	NUMBER	Yes
+data_da_curva	NUMBER	Yes
+condicao_de_resgate_antecipado	VARCHAR2(1 BYTE)	Yes
+juros_vencimento	NUMBER	Yes
+valor_total_vencimento	NUMBER	Yes
+tipo_de_regime	VARCHAR2(10 BYTE)	Yes
+descricao_adicional	VARCHAR2(50 BYTE)	Yes
+ID	NUMBER	No	"CUSTODIA"."ISEQ$$_82865".nextval
