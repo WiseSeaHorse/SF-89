@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
-
 CSV_FOLDER = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
 TARGET_TABLE = "TESTE2_STAGING"
 ORACLE_AUTH = "custodia/MVPCustodia2025@localhost:1522/XEPDB1"
@@ -21,38 +20,24 @@ PROC_DIR = os.path.join(CSV_FOLDER, "_processados")
 for d in [WORK_DIR, LOG_DIR, PROC_DIR]: os.makedirs(d, exist_ok=True)
 
 # ============================================================
-# MAPEAMENTO EXATO (ARQUIVO -> ORACLE)
+# MAPEAMENTO MANUAL INFALÍVEL
 # ============================================================
-
-def get_oracle_column(csv_column_name):
-    """
-    Traduz o nome da coluna do CSV exatamente para o nome da coluna no Oracle.
-    """
-    # 1. Normalização básica
-    n = csv_column_name.lower().strip().replace('"', '')
-    n = re.sub(r'[áàâãä]', 'a', n); n = re.sub(r'[éèêë]', 'e', n)
-    n = re.sub(r'[íìîï]', 'i', n); n = re.sub(r'[óòôõö]', 'o', n)
-    n = re.sub(r'[úùûü]', 'u', n); n = re.sub(r'[ç]', 'c', n)
-    
-    if '%' in n: n = n.replace('%', 'percentual')
-    n = re.sub(r'[^a-z0-9]+', '_', n).strip('_')
-
-    # 2. Dicionário de exceções para bater com seu Oracle exatamente
-    mapeamento_critico = {
-        "percentual_indice_taxa_flutuante": "PERCENTUAL_INDICE_TAXA",
-        "condicao_de_resgate_antecipado": "CONDICAO_RESGATE_ANTECIPADO",
-        "codigo_do_agente_de_pagamento": "CODIGO_DO_AGENTE_DE_PAGAMENTO",
-        "rentabilidade_indexador_taxa_flutuante": "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE"
-    }
-
-    return mapeamento_critico.get(n, n.upper())
-
-# ============================================================
-# UTILITÁRIOS DE LOG E PERFORMANCE
-# ============================================================
+# Aqui listamos as colunas na ordem EXATA que aparecem no seu CSV.
+# O SQL*Loader usará essa ordem para injetar na tabela.
+COLUNAS_ORDEM_CSV = [
+    "CODIGO_DO_REGISTRADOR", "DATA_DE_VENCIMENTO", "CODIGO_DO_TIPO_DO_ATIVO",
+    "ATIVO", "DATA_DA_EMISSAO", "QUANTIDADE_DEPOSITADA", "QUANTIDADE_EMITIDA",
+    "VALOR_ATUAL", "JUROS", "VALOR_TOTAL", "INDICADOR_DE_REGISTRADOR",
+    "CODIGO_DO_AGENTE_DE_PAGAMENTO", "VALOR_UN_EMISSAO",
+    "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE",  # Verifique se não há espaços aqui
+    "PERCENTUAL_INDICE_TAXA", "DESCRICAO_DO_INDICE_VCP", "TIPO_DO_INDICE_VCP",
+    "TAXA_DE_JUROS_SPREAD", "FORMA_DE_PAGAMENTO", "CRITERIO_DE_JUROS",
+    "VALOR_TOTAL_ANTERIOR", "VALOR_PU_ANTERIOR", "VALOR_PU_ATUAL",
+    "DATA_DA_CURVA", "CONDICAO_RESGATE_ANTECIPADO", "JUROS_VENCIMENTO",
+    "VALOR_TOTAL_VENCIMENTO", "TIPO_DE_REGIME", "DESCRICAO_ADICIONAL"
+]
 
 def get_rows_imported(log_path):
-    """Extrai a contagem de linhas do log do SQL*Loader."""
     try:
         with open(log_path, 'r', encoding='latin-1') as f:
             content = f.read()
@@ -61,15 +46,13 @@ def get_rows_imported(log_path):
     except: return "N/A"
 
 # ============================================================
-# PROCESSO PRINCIPAL
+# GERAÇÃO DO CTL
 # ============================================================
-
-def build_ctl(csv_path, header_columns, user, date_rec):
+def build_ctl(csv_path, user, date_rec):
     d_str = date_rec.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Termos para identificar colunas NUMBER no Oracle para tratar a vírgula
     num_terms = ['VALOR', 'QUANTIDADE', 'JUROS', 'TAXA', 'PERCENTUAL', 'CURVA', 'VENCIMENTO', 'EMISSAO', 'REGISTRADOR']
 
+    # Note as aspas duplas em volta dos nomes das colunas: isso resolve conflitos de nomes reservados ou case-sensitivity
     lines = [
         "OPTIONS (DIRECT=TRUE, ERRORS=100000, BINDSIZE=20971520, READSIZE=20971520, COLUMNARRAYROWS=10000)",
         "LOAD DATA",
@@ -79,34 +62,32 @@ def build_ctl(csv_path, header_columns, user, date_rec):
         "FIELDS TERMINATED BY ';' OPTIONALLY ENCLOSED BY '\"'",
         "TRAILING NULLCOLS",
         "(",
-        "  DATA_IMPORTACAO EXPRESSION \"SYSDATE\",",
-        f"  USER_IMPORT CONSTANT '{user}',",
-        f"  DATA_ARQUIVO_RECEBIMENTO EXPRESSION \"TO_DATE('{d_str}', 'YYYY-MM-DD HH24:MI:SS')\",",
+        '  DATA_IMPORTACAO EXPRESSION "SYSDATE",',
+        f'  USER_IMPORT CONSTANT "{user}",',
+        f'  DATA_ARQUIVO_RECEBIMENTO EXPRESSION "TO_DATE(\'{d_str}\', \'YYYY-MM-DD HH24:MI:SS\')",',
     ]
 
-    for i, col_csv in enumerate(header_columns):
-        col_oracle = get_oracle_column(col_csv)
-        sep = "," if i < len(header_columns) - 1 else ""
+    for i, col in enumerate(COLUNAS_ORDEM_CSV):
+        sep = "," if i < len(COLUNAS_ORDEM_CSV) - 1 else ""
         
-        # Se for coluna numérica, aplica REPLACE para converter formato PT-BR (1.234,56) para Oracle (1234.56)
-        if any(t in col_oracle for t in num_terms):
-            lines.append(f'  {col_oracle} CHAR(4000) "REPLACE(REPLACE(:{col_oracle}, \'.\', \'\'), \',\', \'.\')"{sep}')
+        # Colocamos aspas duplas na coluna para o Oracle não se perder
+        if any(t in col for t in num_terms):
+            lines.append(f'  "{col}" CHAR(4000) "REPLACE(REPLACE(:{col}, \'.\', \'\'), \',\', \'.\')"{sep}')
         else:
-            lines.append(f'  {col_oracle} CHAR(4000){sep}')
+            lines.append(f'  "{col}" CHAR(4000){sep}')
     
     lines.append(")")
     return "\n".join(lines)
 
+# ============================================================
+# PROCESSAMENTO
+# ============================================================
 def process_file(filename):
     start_proc = datetime.now()
     src = os.path.join(CSV_FOLDER, filename)
     if not os.path.isfile(src) or filename.startswith('_'): return
 
     try:
-        # Lendo apenas o cabeçalho
-        with open(src, 'r', encoding='latin-1') as f:
-            header = f.readline().strip().split(';')
-        
         user = os.environ.get("USERNAME", "USER")
         mtime = datetime.fromtimestamp(os.path.getmtime(src))
         
@@ -114,41 +95,24 @@ def process_file(filename):
         log = os.path.join(LOG_DIR, f"{filename}.log")
         bad = os.path.join(LOG_DIR, f"{filename}.bad")
 
-        # Escreve o CTL
+        # Geramos o CTL ignorando o cabeçalho lido do arquivo e usando a nossa lista fixa
         with open(ctl, "w", encoding="utf-8") as f:
-            f.write(build_ctl(src, header, user, mtime))
+            f.write(build_ctl(src, user, mtime))
 
-        # Executa SQL*Loader
         cmd = [SQLLDR, ORACLE_AUTH, f"control={ctl}", f"log={log}", f"bad={bad}", "skip=1", "silent=header,feedback"]
         res = subprocess.run(cmd, capture_output=True, text=True)
 
-        duration = datetime.now() - start_proc
-        
         if res.returncode in [0, 2]:
             rows = get_rows_imported(log)
-            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {duration}")
+            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {datetime.now() - start_proc}")
             shutil.move(src, os.path.join(PROC_DIR, filename))
         else:
-            print(f"[ERRO] {filename} | Falha na importação. Verifique o log em _logs.")
+            print(f"[ERRO] {filename} | Falha (RC={res.returncode}). Verifique o log.")
 
     except Exception as e:
-        print(f"[FALHA CRÍTICA] {filename}: {e}")
-
-# ============================================================
-# EXECUÇÃO PARALELA
-# ============================================================
+        print(f"[FALHA] {filename}: {e}")
 
 if __name__ == "__main__":
-    print(f"--- Iniciando Processamento ({datetime.now().strftime('%H:%M:%S')}) ---")
-    global_start = datetime.now()
-    
     files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv", ".txt"))]
-
-    if not files:
-        print("Nenhum arquivo encontrado.")
-    else:
-        # max_workers=3 para manter a velocidade sem travar o I/O do disco
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            executor.map(process_file, files)
-
-    print(f"\n--- Finalizado em: {datetime.now() - global_start} ---")
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(process_file, files)
