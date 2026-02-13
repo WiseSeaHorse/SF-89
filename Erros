@@ -1,69 +1,169 @@
-Extract: End of central directory record signature not found. Either not a zip file, or file is truncated., End of central directory record signature not found. Either not a zip file, or file is truncated.
+import os
+import csv
+import subprocess
+import pandas as pd
+from datetime import datetime
 
+# ============================================================
+# CONFIGURAÇÕES FIXAS
+# ============================================================
 
-PS C:\Users\thatyane_soares>
->> python -m pip install --upgrade pip
->> python -m pip install vsixget --timeout 120 --retries 10 --default-timeout 120
->>
-Requirement already satisfied: pip in c:\users\thatyane_soares\appdata\local\anaconda3\lib\site-packages (25.1)
+CSV_FOLDER = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
+TARGET_TABLE = "TESTE2_STAGING"
 
-WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken
- by 'ConnectTimeoutError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x0000023F5526FA10>, 'Connec
-tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
-WARNING: Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken
- by 'ConnectTimeoutError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x0000023F55398550>, 'Connec
-tion to pypi.org timed out. (connect timeout=15)')': /simple/pip/
+ORACLE_USER = "custodia"
+ORACLE_PASSWORD = "MVPCustodia2025"      # ← senha explícita
+ORACLE_DSN = "localhost:1522/XEPDB1"
 
+SQLLDR = "sqlldr"    # sem caminho (usa o PATH do Windows)
 
-2025-12-08 18:22:33.627 [info] [Window] Started local extension host with pid 38908.
-2025-12-08 18:22:34.902 [info] [Window] MCP Registry configured: https://api.mcp.github.com
-2025-12-08 18:22:35.125 [info] [Window] Settings Sync: Account status changed from uninitialized to unavailable
-2025-12-08 18:22:35.301 [info] [Cloud Changes] Prompting to enable cloud changes, has application previously launched from Continue On flow: false
-2025-12-08 18:22:36.332 [info] [Window] [perf] Render performance baseline is 41ms
-2025-12-08 18:22:44.377 [warning] [Window] [ms-toolsai.vscode-jupyter-cell-tags]: View container 'jupyter-variables' does not exist and all views registered to it will be added to 'Explorer'.
-2025-12-08 18:24:25.396 [error] [Network] #8: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/dotjoshjohnson/xml/latest - error GET Canceled
-2025-12-08 18:24:25.397 [error] [Network] #9: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/ms-azuretools/vscode-containers/latest - error GET Canceled
-2025-12-08 18:24:25.397 [error] [Network] #10: https://marketplace.visualstudio.com/_apis/public/gallery/vscode/github/copilot/latest - error GET Canceled
-2025-12-08 18:24:25.400 [error] [Window] Cancelled: Canceled: Canceled
-    at lQe.L (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:35089)
-    at async lQe.K (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:33813)
-    at async lQe.C (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:24533)
-    at async vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:23898
-    at async Promise.all (index 0)
-    at async lQe.B (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:23852)
-    at async lQe.getExtensions (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:1353:22509)
-    at async Vut.getExtensions (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2493:15152)
-    at async yQs.Rc (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2489:17026)
-    at async yQs.$c (vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/workbench/workbench.desktop.main.js:2489:19670)
-2025-12-08 18:25:05.104 [error] [Window] Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
-    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
-    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
-    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
-2025-12-08 18:25:05.113 [error] [Window] End of central directory record signature not found. Either not a zip file, or file is truncated.: Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
-    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
-    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
-    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
-2025-12-08 18:26:49.016 [error] [Window] Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
-    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
-    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
-    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
-2025-12-08 18:26:49.026 [error] [Window] End of central directory record signature not found. Either not a zip file, or file is truncated.: Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
-    at O0 (file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:25254)
-    at file:///c:/Program%20Files/Microsoft%20VS%20Code/resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js:74:26582
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:40:7
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:190:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\index.js:712:5
-    at c:\Program Files\Microsoft VS Code\resources\app\node_modules\yauzl\fd-slicer.js:33:7
-    at FSReqCallback.wrapper [as oncomplete] (node:fs:672:5)
+WORK_DIR = os.path.join(CSV_FOLDER, "_work")
+LOG_DIR = os.path.join(CSV_FOLDER, "_logs")
+os.makedirs(WORK_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# ============================================================
+# FUNÇÕES DE NORMALIZAÇÃO
+# ============================================================
+
+def to_number(v):
+    if v is None: return ""
+    v = str(v).strip()
+    if v == "": return ""
+    v = v.replace(".", "").replace(",", ".")
+    try:
+        return str(float(v))
+    except:
+        return ""
+
+def to_datetime(v):
+    if v is None: return ""
+    v = str(v).strip()
+    if v == "": return ""
+    dt = pd.to_datetime(v, dayfirst=True, errors="coerce")
+    if pd.isna(dt): return ""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def quote(n):
+    return f'"{n}"'
+
+# ============================================================
+# GERADOR DO ARQUIVO .CTL
+# ============================================================
+
+def build_ctl(data_file, tabela, colunas, usuario, data_rec):
+    opts = "DIRECT=TRUE, ERRORS=100000, ROWS=100000"
+
+    d = data_rec.strftime("%Y-%m-%d %H:%M:%S")
+
+    linhas = [
+        f"OPTIONS ({opts})",
+        "LOAD DATA",
+        f"INFILE '{data_file}'",
+        f"INTO TABLE {tabela}",
+        "APPEND",
+        'FIELDS TERMINATED BY ";"',
+        'OPTIONALLY ENCLOSED BY \'"\'' ,
+        "(",
+        f'  {quote("DATA_IMPORTACAO")} EXPRESSION "SYSDATE",',
+        f'  {quote("USER_IMPORT")} CONSTANT \'{usuario}\',',
+        f'  {quote("ID_UNICO_ARQUIVO")} EXPRESSION "NULL",',
+        f'  {quote("DATA_ARQUIVO_RECEBIMENTO")} EXPRESSION "TO_DATE(\'{d}\',\'YYYY-MM-DD HH24:MI:SS\')",'
+    ]
+
+    for i, c in enumerate(colunas):
+        sep = "," if i < len(colunas)-1 else ""
+        linhas.append(f"  {quote(c)} CHAR{sep}")
+
+    linhas.append(")")
+    return "\n".join(linhas)
+
+# ============================================================
+# EXECUTA SQL*LOADER
+# ============================================================
+
+def run_sqlldr(ctl, log, bad):
+    cmd = [
+        SQLLDR,
+        f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
+        f"control={ctl}",
+        f"log={log}",
+        f"bad={bad}"
+    ]
+    print("[INFO] Executando SQL*Loader...")
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    print("[SQLLDR STDERR]:")
+    print(p.stderr)
+    return p.returncode
+
+# ============================================================
+# PROCESSA UM ARQUIVO
+# ============================================================
+
+def process_file(filename):
+
+    print(f"\n[INFO] Processando: {filename}")
+
+    src = os.path.join(CSV_FOLDER, filename)
+    out_csv = os.path.join(WORK_DIR, filename + "__norm.csv")
+    ctl = os.path.join(WORK_DIR, filename + ".ctl")
+    log = os.path.join(LOG_DIR, filename + ".log")
+    bad = os.path.join(LOG_DIR, filename + ".bad")
+
+    usuario = os.getenv("USERNAME", "USER")
+    data_rec = datetime.fromtimestamp(os.path.getmtime(src))
+
+    df = pd.read_csv(src, sep=";", dtype=str, keep_default_na=False, na_filter=False)
+
+    colunas = list(df.columns)
+
+    out_rows = []
+    for _, row in df.iterrows():
+        new = []
+        for c in colunas:
+            v = row[c].strip()
+
+            if v == "":
+                new.append("")
+                continue
+
+            n = to_number(v)
+            if n != "":
+                new.append(n)
+                continue
+
+            d = to_datetime(v)
+            if d != "":
+                new.append(d)
+                continue
+
+            new.append(v)
+
+        out_rows.append(new)
+
+    with open(out_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerows(out_rows)
+
+    ctl_text = build_ctl(out_csv, TARGET_TABLE, colunas, usuario, data_rec)
+    with open(ctl, "w", encoding="utf-8") as f:
+        f.write(ctl_text)
+
+    rc = run_sqlldr(ctl, log, bad)
+    print(f"[INFO] RC={rc}")
+
+# ============================================================
+# MAIN
+# ============================================================
+
+print("Iniciando importação com SQL*Loader...")
+
+files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv",".txt"))]
+
+if not files:
+    print("[ERRO] Nenhum arquivo encontrado.")
+else:
+    for f in files:
+        process_file(f)
+
+print("[INFO] Processo finalizado.")
