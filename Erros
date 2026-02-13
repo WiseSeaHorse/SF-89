@@ -20,19 +20,39 @@ PROC_DIR = os.path.join(CSV_FOLDER, "_processados")
 for d in [WORK_DIR, LOG_DIR, PROC_DIR]: os.makedirs(d, exist_ok=True)
 
 # ============================================================
-# LISTA DE COLUNAS EXATAMENTE COMO ESTÃO NO SEU ORACLE
+# LISTA OFICIAL (BASEADA NO SEU DICIONÁRIO DE DADOS ORACLE)
 # ============================================================
+# Estes nomes DEVEM estar idênticos aos da sua tabela Oracle.
 ORACLE_COLUMNS = [
-    "CODIGO_DO_REGISTRADOR", "DATA_DE_VENCIMENTO", "CODIGO_DO_TIPO_DO_ATIVO",
-    "ATIVO", "DATA_DA_EMISSAO", "QUANTIDADE_DEPOSITADA", "QUANTIDADE_EMITIDA",
-    "VALOR_ATUAL", "JUROS", "VALOR_TOTAL", "INDICADOR_DE_REGISTRADOR",
-    "CODIGO_DO_AGENTE_DE_PAGAMENTO", "VALOR_UN_EMISSAO",
-    "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE", "PERCENTUAL_INDICE_TAXA",
-    "DESCRICAO_DO_INDICE_VCP", "TIPO_DO_INDICE_VCP", "TAXA_DE_JUROS_SPREAD",
-    "FORMA_DE_PAGAMENTO", "CRITERIO_DE_JUROS", "VALOR_TOTAL_ANTERIOR",
-    "VALOR_PU_ANTERIOR", "VALOR_PU_ATUAL", "DATA_DA_CURVA",
-    "CONDICAO_RESGATE_ANTECIPADO", "JUROS_VENCIMENTO", "VALOR_TOTAL_VENCIMENTO",
-    "TIPO_DE_REGIME", "DESCRICAO_ADICIONAL"
+    "CODIGO_DO_REGISTRADOR",
+    "DATA_DE_VENCIMENTO",
+    "CODIGO_DO_TIPO_DO_ATIVO",
+    "ATIVO",
+    "DATA_DA_EMISSAO",
+    "QUANTIDADE_DEPOSITADA",
+    "QUANTIDADE_EMITIDA",
+    "VALOR_ATUAL",
+    "JUROS",
+    "VALOR_TOTAL",
+    "INDICADOR_DE_REGISTRADOR",
+    "CODIGO_DO_AGENTE_DE_PAGAMENTO",
+    "VALOR_UN_EMISSAO",
+    "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE",
+    "PERCENTUAL_INDICE_TAXA",
+    "DESCRICAO_DO_INDICE_VCP",
+    "TIPO_DO_INDICE_VCP",
+    "TAXA_DE_JUROS_SPREAD",
+    "FORMA_DE_PAGAMENTO",
+    "CRITERIO_DE_JUROS",
+    "VALOR_TOTAL_ANTERIOR",
+    "VALOR_PU_ANTERIOR",
+    "VALOR_PU_ATUAL",
+    "DATA_DA_CURVA",
+    "CONDICAO_RESGATE_ANTECIPADO",
+    "JUROS_VENCIMENTO",
+    "VALOR_TOTAL_VENCIMENTO",
+    "TIPO_DE_REGIME",
+    "DESCRICAO_ADICIONAL"
 ]
 
 def get_rows_imported(log_path):
@@ -48,6 +68,7 @@ def get_rows_imported(log_path):
 # ============================================================
 def build_ctl(csv_path, user, date_rec):
     d_str = date_rec.strftime("%Y-%m-%d %H:%M:%S")
+    # Colunas que o script tratará como número para converter vírgula em ponto
     num_terms = ['VALOR', 'QUANTIDADE', 'JUROS', 'TAXA', 'PERCENTUAL', 'CURVA', 'VENCIMENTO', 'EMISSAO', 'REGISTRADOR', 'PU']
 
     lines = [
@@ -59,26 +80,27 @@ def build_ctl(csv_path, user, date_rec):
         "FIELDS TERMINATED BY ';' OPTIONALLY ENCLOSED BY '\"'",
         "TRAILING NULLCOLS",
         "(",
-        '  DATA_IMPORTACAO EXPRESSION "SYSDATE",',
-        f'  USER_IMPORT CONSTANT "{user}",',
-        f'  DATA_ARQUIVO_RECEBIMENTO EXPRESSION "TO_DATE(\'{d_str}\', \'YYYY-MM-DD HH24:MI:SS\')",',
+        '  "DATA_IMPORTACAO" EXPRESSION "SYSDATE",',
+        f'  "USER_IMPORT" CONSTANT "{user}",',
+        f'  "DATA_ARQUIVO_RECEBIMENTO" EXPRESSION "TO_DATE(\'{d_str}\', \'YYYY-MM-DD HH24:MI:SS\')",',
     ]
 
     for i, col in enumerate(ORACLE_COLUMNS):
         sep = "," if i < len(ORACLE_COLUMNS) - 1 else ""
         
-        # Removido POSITION(NEXT) para evitar o erro 350
-        # A expressão SQL usa :NOME sem aspas duplas internas para evitar erro de parser
-        if any(t in col for t in num_terms):
-            lines.append(f'  {col} CHAR(4000) "REPLACE(REPLACE(:{col}, \'.\', \'\'), \',\', \'.\')"{sep}')
+        # O pulo do gato: Colocamos ASPAS DUPLAS em volta de todos os nomes de colunas.
+        # Isso faz o Oracle parar de reclamar se o nome for longo ou tiver caracteres especiais.
+        if any(t in col.upper() for t in num_terms):
+            # Expressão de REPLACE usando :COLUNA (sem aspas dentro do : para não quebrar o parser)
+            lines.append(f'  "{col}" CHAR(4000) "REPLACE(REPLACE(:{col}, \'.\', \'\'), \',\', \'.\')"{sep}')
         else:
-            lines.append(f'  {col} CHAR(4000){sep}')
+            lines.append(f'  "{col}" CHAR(4000){sep}')
     
     lines.append(")")
     return "\n".join(lines)
 
 # ============================================================
-# PROCESSAMENTO
+# PROCESSAMENTO DOS ARQUIVOS
 # ============================================================
 def process_file(filename):
     start_proc = datetime.now()
@@ -93,23 +115,31 @@ def process_file(filename):
         log = os.path.join(LOG_DIR, f"{filename}.log")
         bad = os.path.join(LOG_DIR, f"{filename}.bad")
 
+        # Gerar o arquivo de controle forçando os nomes
         with open(ctl, "w", encoding="utf-8") as f:
             f.write(build_ctl(src, user, mtime))
 
+        # Executar SQL*Loader
         cmd = [SQLLDR, ORACLE_AUTH, f"control={ctl}", f"log={log}", f"bad={bad}", "skip=1", "silent=header,feedback"]
         res = subprocess.run(cmd, capture_output=True, text=True)
 
+        duration = datetime.now() - start_proc
         if res.returncode in [0, 2]:
             rows = get_rows_imported(log)
-            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {datetime.now() - start_proc}")
+            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {duration}")
             shutil.move(src, os.path.join(PROC_DIR, filename))
         else:
-            print(f"[ERRO] {filename} | Erro SQL*Loader. Verifique o log em: {log}")
+            print(f"[ERRO] {filename} | Verifique o arquivo de log: {log}")
 
     except Exception as e:
         print(f"[FALHA] {filename}: {e}")
 
 if __name__ == "__main__":
+    print(f"--- Iniciando Carga Paralela ---")
     files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv", ".txt"))]
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        executor.map(process_file, files)
+    
+    if not files:
+        print("Nenhum arquivo encontrado.")
+    else:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            executor.map(process_file, files)
