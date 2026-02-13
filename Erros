@@ -1,21 +1,18 @@
 import os
-import csv
 import subprocess
-import pandas as pd
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 # ============================================================
-# CONFIGURAÇÕES FIXAS
+# CONFIGURAÇÕES
 # ============================================================
 
 CSV_FOLDER = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
 TARGET_TABLE = "TESTE2_STAGING"
-
 ORACLE_USER = "custodia"
-ORACLE_PASSWORD = "MVPCustodia2025"      # ← senha explícita
+ORACLE_PASSWORD = "MVPCustodia2025"
 ORACLE_DSN = "localhost:1522/XEPDB1"
-
-SQLLDR = "sqlldr"    # sem caminho (usa o PATH do Windows)
+SQLLDR = "sqlldr"
 
 WORK_DIR = os.path.join(CSV_FOLDER, "_work")
 LOG_DIR = os.path.join(CSV_FOLDER, "_logs")
@@ -23,147 +20,108 @@ os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # ============================================================
-# FUNÇÕES DE NORMALIZAÇÃO
+# GERADOR DO ARQUIVO .CTL OTIMIZADO
 # ============================================================
 
-def to_number(v):
-    if v is None: return ""
-    v = str(v).strip()
-    if v == "": return ""
-    v = v.replace(".", "").replace(",", ".")
-    try:
-        return str(float(v))
-    except:
-        return ""
-
-def to_datetime(v):
-    if v is None: return ""
-    v = str(v).strip()
-    if v == "": return ""
-    dt = pd.to_datetime(v, dayfirst=True, errors="coerce")
-    if pd.isna(dt): return ""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-def quote(n):
-    return f'"{n}"'
-
-# ============================================================
-# GERADOR DO ARQUIVO .CTL
-# ============================================================
-
-def build_ctl(data_file, tabela, colunas, usuario, data_rec):
-    opts = "DIRECT=TRUE, ERRORS=100000, ROWS=100000"
-
+def build_ctl(csv_file, colunas, usuario, data_rec):
     d = data_rec.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Parâmetros de performance:
+    # BINDSIZE e READSIZE para buffers grandes
+    # COLUMNARRAYROWS para processamento em lote no Direct Path
+    opts = "DIRECT=TRUE, ERRORS=100000, BINDSIZE=10485760, READSIZE=10485760, COLUMNARRAYROWS=5000"
 
     linhas = [
         f"OPTIONS ({opts})",
         "LOAD DATA",
-        f"INFILE '{data_file}'",
-        f"INTO TABLE {tabela}",
+        "CHARACTERSET UTF8",
+        f"INFILE '{csv_file}'",
+        f"INTO TABLE {TARGET_TABLE}",
         "APPEND",
-        'FIELDS TERMINATED BY ";"',
-        'OPTIONALLY ENCLOSED BY \'"\'' ,
+        "FIELDS TERMINATED BY ';'",
+        "OPTIONALLY ENCLOSED BY '\"'",
+        "TRAILING NULLCOLS",
         "(",
-        f'  {quote("DATA_IMPORTACAO")} EXPRESSION "SYSDATE",',
-        f'  {quote("USER_IMPORT")} CONSTANT \'{usuario}\',',
-        f'  {quote("ID_UNICO_ARQUIVO")} EXPRESSION "NULL",',
-        f'  {quote("DATA_ARQUIVO_RECEBIMENTO")} EXPRESSION "TO_DATE(\'{d}\',\'YYYY-MM-DD HH24:MI:SS\')",'
+        f"  DATA_IMPORTACAO EXPRESSION \"SYSDATE\",",
+        f"  USER_IMPORT CONSTANT '{usuario}',",
+        f"  DATA_ARQUIVO_RECEBIMENTO EXPRESSION \"TO_DATE('{d}', 'YYYY-MM-DD HH24:MI:SS')\",",
     ]
 
     for i, c in enumerate(colunas):
-        sep = "," if i < len(colunas)-1 else ""
-        linhas.append(f"  {quote(c)} CHAR{sep}")
+        sep = "," if i < len(colunas) - 1 else ""
+        # Lógica: O SQL*Loader lê como CHAR, e o Oracle tenta converter para o tipo da coluna destino.
+        # Se você precisar tratar vírgula/ponto especificamente em colunas numéricas, 
+        # use a expressão abaixo (exemplo comentado):
+        # f'  "{c}" CHAR(4000) "REPLACE(REPLACE(:{c}, \'.\', \'\'), \',\', \'.\')"{sep}'
+        linhas.append(f'  "{c}" CHAR(4000){sep}')
 
     linhas.append(")")
     return "\n".join(linhas)
 
 # ============================================================
-# EXECUTA SQL*LOADER
-# ============================================================
-
-def run_sqlldr(ctl, log, bad):
-    cmd = [
-        SQLLDR,
-        f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
-        f"control={ctl}",
-        f"log={log}",
-        f"bad={bad}"
-    ]
-    print("[INFO] Executando SQL*Loader...")
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    print("[SQLLDR STDERR]:")
-    print(p.stderr)
-    return p.returncode
-
-# ============================================================
-# PROCESSA UM ARQUIVO
+# PROCESSAMENTO DE ARQUIVO
 # ============================================================
 
 def process_file(filename):
+    try:
+        src_path = os.path.abspath(os.path.join(CSV_FOLDER, filename))
+        if os.path.isdir(src_path): return
 
-    print(f"\n[INFO] Processando: {filename}")
+        print(f"[PROCESSANDO] {filename}")
+        
+        ctl_path = os.path.join(WORK_DIR, filename + ".ctl")
+        log_path = os.path.join(LOG_DIR, filename + ".log")
+        bad_path = os.path.join(LOG_DIR, filename + ".bad")
 
-    src = os.path.join(CSV_FOLDER, filename)
-    out_csv = os.path.join(WORK_DIR, filename + "__norm.csv")
-    ctl = os.path.join(WORK_DIR, filename + ".ctl")
-    log = os.path.join(LOG_DIR, filename + ".log")
-    bad = os.path.join(LOG_DIR, filename + ".bad")
+        usuario = os.environ.get("USERNAME", "USER")
+        data_rec = datetime.fromtimestamp(os.path.getmtime(src_path))
 
-    usuario = os.getenv("USERNAME", "USER")
-    data_rec = datetime.fromtimestamp(os.path.getmtime(src))
+        # Pega apenas a primeira linha para descobrir as colunas (rápido!)
+        with open(src_path, 'r', encoding='utf-8') as f:
+            header = f.readline().strip()
+            colunas = header.split(';')
 
-    df = pd.read_csv(src, sep=";", dtype=str, keep_default_na=False, na_filter=False)
+        # Gera o CTL apontando para o arquivo ORIGINAL (sem criar cópia normalizada)
+        # IMPORTANTE: Usamos SKIP=1 no comando sqlldr para pular o cabeçalho
+        ctl_text = build_ctl(src_path, colunas, usuario, data_rec)
+        
+        with open(ctl_path, "w", encoding="utf-8") as f:
+            f.write(ctl_text)
 
-    colunas = list(df.columns)
+        # Executa SQL*Loader com SKIP=1 para ignorar o cabeçalho original
+        cmd = [
+            SQLLDR,
+            f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
+            f"control={ctl_path}",
+            f"log={log_path}",
+            f"bad={bad_path}",
+            "skip=1",
+            "silent=header,feedback"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode in [0, 2]: # 0 = Sucesso, 2 = Avisos (linhas ruins mas completou)
+            print(f"[OK] {filename} carregado.")
+        else:
+            print(f"[ERRO] {filename} falhou. Verifique o log: {log_path}")
 
-    out_rows = []
-    for _, row in df.iterrows():
-        new = []
-        for c in colunas:
-            v = row[c].strip()
-
-            if v == "":
-                new.append("")
-                continue
-
-            n = to_number(v)
-            if n != "":
-                new.append(n)
-                continue
-
-            d = to_datetime(v)
-            if d != "":
-                new.append(d)
-                continue
-
-            new.append(v)
-
-        out_rows.append(new)
-
-    with open(out_csv, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerows(out_rows)
-
-    ctl_text = build_ctl(out_csv, TARGET_TABLE, colunas, usuario, data_rec)
-    with open(ctl, "w", encoding="utf-8") as f:
-        f.write(ctl_text)
-
-    rc = run_sqlldr(ctl, log, bad)
-    print(f"[INFO] RC={rc}")
+    except Exception as e:
+        print(f"[FALHA CRÍTICA] {filename}: {str(e)}")
 
 # ============================================================
 # MAIN
 # ============================================================
 
-print("Iniciando importação com SQL*Loader...")
+if __name__ == "__main__":
+    start = datetime.now()
+    
+    # Lista arquivos ignorando pastas e arquivos de log
+    files = [f for f in os.listdir(CSV_FOLDER) 
+             if f.lower().endswith((".csv", ".txt"))]
 
-files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv",".txt"))]
+    # max_workers=2 ou 4. Cuidado para não saturar o I/O do disco ou rede
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        executor.map(process_file, files)
 
-if not files:
-    print("[ERRO] Nenhum arquivo encontrado.")
-else:
-    for f in files:
-        process_file(f)
-
-print("[INFO] Processo finalizado.")
+    print(f"\nTempo total de execução: {datetime.now() - start}")
