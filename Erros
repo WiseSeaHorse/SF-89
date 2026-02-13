@@ -22,37 +22,17 @@ for d in [WORK_DIR, LOG_DIR, PROC_DIR]: os.makedirs(d, exist_ok=True)
 # ============================================================
 # LISTA DE COLUNAS EXATAMENTE COMO ESTÃO NO SEU ORACLE
 # ============================================================
-# A ordem abaixo deve ser a mesma ordem das colunas no seu arquivo TXT/CSV
 ORACLE_COLUMNS = [
-    "CODIGO_DO_REGISTRADOR",
-    "DATA_DE_VENCIMENTO",
-    "CODIGO_DO_TIPO_DO_ATIVO",
-    "ATIVO",
-    "DATA_DA_EMISSAO",
-    "QUANTIDADE_DEPOSITADA",
-    "QUANTIDADE_EMITIDA",
-    "VALOR_ATUAL",
-    "JUROS",
-    "VALOR_TOTAL",
-    "INDICADOR_DE_REGISTRADOR",
-    "CODIGO_DO_AGENTE_DE_PAGAMENTO",
-    "VALOR_UN_EMISSAO",
-    "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE",
-    "PERCENTUAL_INDICE_TAXA",  # Ajustado para o nome que você confirmou no Oracle
-    "DESCRICAO_DO_INDICE_VCP",
-    "TIPO_DO_INDICE_VCP",
-    "TAXA_DE_JUROS_SPREAD",
-    "FORMA_DE_PAGAMENTO",
-    "CRITERIO_DE_JUROS",
-    "VALOR_TOTAL_ANTERIOR",
-    "VALOR_PU_ANTERIOR",
-    "VALOR_PU_ATUAL",
-    "DATA_DA_CURVA",
-    "CONDICAO_RESGATE_ANTECIPADO", # Ajustado para o nome que você confirmou no Oracle
-    "JUROS_VENCIMENTO",
-    "VALOR_TOTAL_VENCIMENTO",
-    "TIPO_DE_REGIME",
-    "DESCRICAO_ADICIONAL"
+    "CODIGO_DO_REGISTRADOR", "DATA_DE_VENCIMENTO", "CODIGO_DO_TIPO_DO_ATIVO",
+    "ATIVO", "DATA_DA_EMISSAO", "QUANTIDADE_DEPOSITADA", "QUANTIDADE_EMITIDA",
+    "VALOR_ATUAL", "JUROS", "VALOR_TOTAL", "INDICADOR_DE_REGISTRADOR",
+    "CODIGO_DO_AGENTE_DE_PAGAMENTO", "VALOR_UN_EMISSAO",
+    "RENTABILIDADE_INDEXADOR_TAXA_FLUTUANTE", "PERCENTUAL_INDICE_TAXA",
+    "DESCRICAO_DO_INDICE_VCP", "TIPO_DO_INDICE_VCP", "TAXA_DE_JUROS_SPREAD",
+    "FORMA_DE_PAGAMENTO", "CRITERIO_DE_JUROS", "VALOR_TOTAL_ANTERIOR",
+    "VALOR_PU_ANTERIOR", "VALOR_PU_ATUAL", "DATA_DA_CURVA",
+    "CONDICAO_RESGATE_ANTECIPADO", "JUROS_VENCIMENTO", "VALOR_TOTAL_VENCIMENTO",
+    "TIPO_DE_REGIME", "DESCRICAO_ADICIONAL"
 ]
 
 def get_rows_imported(log_path):
@@ -68,8 +48,6 @@ def get_rows_imported(log_path):
 # ============================================================
 def build_ctl(csv_path, user, date_rec):
     d_str = date_rec.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Identificadores para aplicar o REPLACE de vírgula por ponto
     num_terms = ['VALOR', 'QUANTIDADE', 'JUROS', 'TAXA', 'PERCENTUAL', 'CURVA', 'VENCIMENTO', 'EMISSAO', 'REGISTRADOR', 'PU']
 
     lines = [
@@ -89,12 +67,12 @@ def build_ctl(csv_path, user, date_rec):
     for i, col in enumerate(ORACLE_COLUMNS):
         sep = "," if i < len(ORACLE_COLUMNS) - 1 else ""
         
-        # O uso de POSITION(NEXT) garante que o SQL*Loader pegue a próxima coluna do arquivo
-        # O uso de "" em volta do nome da coluna resolve problemas de case-sensitivity no Oracle
+        # Removido POSITION(NEXT) para evitar o erro 350
+        # A expressão SQL usa :NOME sem aspas duplas internas para evitar erro de parser
         if any(t in col for t in num_terms):
-            lines.append(f'  "{col}" POSITION(NEXT) CHAR(4000) "REPLACE(REPLACE(:\\"{col}\\", \'.\', \'\'), \',\', \'.\')"{sep}')
+            lines.append(f'  {col} CHAR(4000) "REPLACE(REPLACE(:{col}, \'.\', \'\'), \',\', \'.\')"{sep}')
         else:
-            lines.append(f'  "{col}" POSITION(NEXT) CHAR(4000){sep}')
+            lines.append(f'  {col} CHAR(4000){sep}')
     
     lines.append(")")
     return "\n".join(lines)
@@ -115,29 +93,23 @@ def process_file(filename):
         log = os.path.join(LOG_DIR, f"{filename}.log")
         bad = os.path.join(LOG_DIR, f"{filename}.bad")
 
-        # Gerar o arquivo de controle
         with open(ctl, "w", encoding="utf-8") as f:
             f.write(build_ctl(src, user, mtime))
 
-        # Executar SQL*Loader
         cmd = [SQLLDR, ORACLE_AUTH, f"control={ctl}", f"log={log}", f"bad={bad}", "skip=1", "silent=header,feedback"]
         res = subprocess.run(cmd, capture_output=True, text=True)
 
-        duration = datetime.now() - start_proc
         if res.returncode in [0, 2]:
             rows = get_rows_imported(log)
-            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {duration}")
+            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {datetime.now() - start_proc}")
             shutil.move(src, os.path.join(PROC_DIR, filename))
         else:
-            print(f"[ERRO] {filename} | Verifique o arquivo .log em {LOG_DIR}")
+            print(f"[ERRO] {filename} | Erro SQL*Loader. Verifique o log em: {log}")
 
     except Exception as e:
         print(f"[FALHA] {filename}: {e}")
 
 if __name__ == "__main__":
     files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv", ".txt"))]
-    if not files:
-        print("Nenhum arquivo encontrado.")
-    else:
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            executor.map(process_file, files)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(process_file, files)
