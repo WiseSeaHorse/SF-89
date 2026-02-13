@@ -20,21 +20,35 @@ os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # ============================================================
+# FUNÇÃO PARA DETECTAR ENCODING E PEGAR COLUNAS
+# ============================================================
+
+def get_file_info(path):
+    # Tenta UTF-8 primeiro
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            header = f.readline().strip()
+            return header.split(';'), "UTF8"
+    except UnicodeDecodeError:
+        # Se falhar, tenta Latin-1 (Windows-1252)
+        with open(path, 'r', encoding='latin-1') as f:
+            header = f.readline().strip()
+            return header.split(';'), "WE8MSWIN1252"
+
+# ============================================================
 # GERADOR DO ARQUIVO .CTL OTIMIZADO
 # ============================================================
 
-def build_ctl(csv_file, colunas, usuario, data_rec):
+def build_ctl(csv_file, colunas, usuario, data_rec, oracle_charset):
     d = data_rec.strftime("%Y-%m-%d %H:%M:%S")
     
-    # Parâmetros de performance:
-    # BINDSIZE e READSIZE para buffers grandes
-    # COLUMNARRAYROWS para processamento em lote no Direct Path
-    opts = "DIRECT=TRUE, ERRORS=100000, BINDSIZE=10485760, READSIZE=10485760, COLUMNARRAYROWS=5000"
+    # Parâmetros de performance agressivos
+    opts = "DIRECT=TRUE, ERRORS=100000, BINDSIZE=20971520, READSIZE=20971520, COLUMNARRAYROWS=10000"
 
     linhas = [
         f"OPTIONS ({opts})",
         "LOAD DATA",
-        "CHARACTERSET UTF8",
+        f"CHARACTERSET {oracle_charset}", 
         f"INFILE '{csv_file}'",
         f"INTO TABLE {TARGET_TABLE}",
         "APPEND",
@@ -48,12 +62,10 @@ def build_ctl(csv_file, colunas, usuario, data_rec):
     ]
 
     for i, c in enumerate(colunas):
+        col_name = c.strip().strip('"')
         sep = "," if i < len(colunas) - 1 else ""
-        # Lógica: O SQL*Loader lê como CHAR, e o Oracle tenta converter para o tipo da coluna destino.
-        # Se você precisar tratar vírgula/ponto especificamente em colunas numéricas, 
-        # use a expressão abaixo (exemplo comentado):
-        # f'  "{c}" CHAR(4000) "REPLACE(REPLACE(:{c}, \'.\', \'\'), \',\', \'.\')"{sep}'
-        linhas.append(f'  "{c}" CHAR(4000){sep}')
+        # Definindo CHAR(4000) para evitar erros de tamanho de campo
+        linhas.append(f'  "{col_name}" CHAR(4000){sep}')
 
     linhas.append(")")
     return "\n".join(linhas)
@@ -67,7 +79,7 @@ def process_file(filename):
         src_path = os.path.abspath(os.path.join(CSV_FOLDER, filename))
         if os.path.isdir(src_path): return
 
-        print(f"[PROCESSANDO] {filename}")
+        print(f"[INICIANDO] {filename}")
         
         ctl_path = os.path.join(WORK_DIR, filename + ".ctl")
         log_path = os.path.join(LOG_DIR, filename + ".log")
@@ -76,19 +88,16 @@ def process_file(filename):
         usuario = os.environ.get("USERNAME", "USER")
         data_rec = datetime.fromtimestamp(os.path.getmtime(src_path))
 
-        # Pega apenas a primeira linha para descobrir as colunas (rápido!)
-        with open(src_path, 'r', encoding='utf-8') as f:
-            header = f.readline().strip()
-            colunas = header.split(';')
+        # Detecta o encoding e as colunas dinamicamente
+        colunas, charset_name = get_file_info(src_path)
 
-        # Gera o CTL apontando para o arquivo ORIGINAL (sem criar cópia normalizada)
-        # IMPORTANTE: Usamos SKIP=1 no comando sqlldr para pular o cabeçalho
-        ctl_text = build_ctl(src_path, colunas, usuario, data_rec)
+        # Gera o CTL com o charset detectado
+        ctl_text = build_ctl(src_path, colunas, usuario, data_rec, charset_name)
         
         with open(ctl_path, "w", encoding="utf-8") as f:
             f.write(ctl_text)
 
-        # Executa SQL*Loader com SKIP=1 para ignorar o cabeçalho original
+        # Executa SQL*Loader
         cmd = [
             SQLLDR,
             f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
@@ -101,10 +110,10 @@ def process_file(filename):
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
-        if result.returncode in [0, 2]: # 0 = Sucesso, 2 = Avisos (linhas ruins mas completou)
-            print(f"[OK] {filename} carregado.")
+        if result.returncode in [0, 2]:
+            print(f"[SUCESSO] {filename} carregado como {charset_name}")
         else:
-            print(f"[ERRO] {filename} falhou. Verifique o log: {log_path}")
+            print(f"[ERRO] {filename} falhou. Verifique {log_path}")
 
     except Exception as e:
         print(f"[FALHA CRÍTICA] {filename}: {str(e)}")
@@ -116,12 +125,11 @@ def process_file(filename):
 if __name__ == "__main__":
     start = datetime.now()
     
-    # Lista arquivos ignorando pastas e arquivos de log
     files = [f for f in os.listdir(CSV_FOLDER) 
              if f.lower().endswith((".csv", ".txt"))]
 
-    # max_workers=2 ou 4. Cuidado para não saturar o I/O do disco ou rede
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    # Processamento paralelo (ajustado para 3 workers para não travar o disco)
+    with ThreadPoolExecutor(max_workers=3) as executor:
         executor.map(process_file, files)
 
     print(f"\nTempo total de execução: {datetime.now() - start}")
