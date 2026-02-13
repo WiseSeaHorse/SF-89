@@ -1,4 +1,6 @@
 import os
+import re
+import shutil
 import subprocess
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -16,33 +18,49 @@ SQLLDR = "sqlldr"
 
 WORK_DIR = os.path.join(CSV_FOLDER, "_work")
 LOG_DIR = os.path.join(CSV_FOLDER, "_logs")
+PROC_DIR = os.path.join(CSV_FOLDER, "_processados")
+
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(PROC_DIR, exist_ok=True)
 
 # ============================================================
-# FUNÇÃO PARA DETECTAR ENCODING E PEGAR COLUNAS
+# NORMALIZAÇÃO DE NOMES DE COLUNAS
+# ============================================================
+
+def normalize_column_name(name):
+    n = name.lower().strip().replace('"', '')
+    n = re.sub(r'[áàâãä]', 'a', n)
+    n = re.sub(r'[éèêë]', 'e', n)
+    n = re.sub(r'[íìîï]', 'i', n)
+    n = re.sub(r'[óòôõö]', 'o', n)
+    n = re.sub(r'[úùûü]', 'u', n)
+    n = re.sub(r'[ç]', 'c', n)
+    
+    if '%' in n: n = n.replace('%', 'percentual')
+    n = re.sub(r'[^a-z0-9]+', '_', n)
+    return n.strip('_')
+
+# ============================================================
+# DETECÇÃO DE ENCODING
 # ============================================================
 
 def get_file_info(path):
-    # Tenta UTF-8 primeiro
     try:
         with open(path, 'r', encoding='utf-8') as f:
             header = f.readline().strip()
             return header.split(';'), "UTF8"
     except UnicodeDecodeError:
-        # Se falhar, tenta Latin-1 (Windows-1252)
         with open(path, 'r', encoding='latin-1') as f:
             header = f.readline().strip()
             return header.split(';'), "WE8MSWIN1252"
 
 # ============================================================
-# GERADOR DO ARQUIVO .CTL OTIMIZADO
+# GERADOR DO .CTL
 # ============================================================
 
-def build_ctl(csv_file, colunas, usuario, data_rec, oracle_charset):
+def build_ctl(csv_file, colunas_csv, usuario, data_rec, oracle_charset):
     d = data_rec.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Parâmetros de performance agressivos
     opts = "DIRECT=TRUE, ERRORS=100000, BINDSIZE=20971520, READSIZE=20971520, COLUMNARRAYROWS=10000"
 
     linhas = [
@@ -61,24 +79,31 @@ def build_ctl(csv_file, colunas, usuario, data_rec, oracle_charset):
         f"  DATA_ARQUIVO_RECEBIMENTO EXPRESSION \"TO_DATE('{d}', 'YYYY-MM-DD HH24:MI:SS')\",",
     ]
 
-    for i, c in enumerate(colunas):
-        col_name = c.strip().strip('"')
-        sep = "," if i < len(colunas) - 1 else ""
-        # Definindo CHAR(4000) para evitar erros de tamanho de campo
-        linhas.append(f'  "{col_name}" CHAR(4000){sep}')
+    numericos = ['valor', 'quantidade', 'juros', 'taxa', 'percentual', 'curva', 'vencimento', 'emissao', 'registrador']
+
+    for i, c in enumerate(colunas_csv):
+        col_banco = normalize_column_name(c)
+        sep = "," if i < len(colunas_csv) - 1 else ""
+        
+        if any(word in col_banco for word in numericos):
+            linhas.append(f'  {col_banco} CHAR(4000) "REPLACE(REPLACE(:{col_banco}, \'.\', \'\'), \',\', \'.\')"{sep}')
+        else:
+            linhas.append(f'  {col_banco} CHAR(4000){sep}')
 
     linhas.append(")")
     return "\n".join(linhas)
 
 # ============================================================
-# PROCESSAMENTO DE ARQUIVO
+# PROCESSAMENTO E MOVIMENTAÇÃO
 # ============================================================
 
 def process_file(filename):
-    try:
-        src_path = os.path.abspath(os.path.join(CSV_FOLDER, filename))
-        if os.path.isdir(src_path): return
+    src_path = os.path.join(CSV_FOLDER, filename)
+    
+    # Ignora pastas e arquivos que já estão nas subpastas de sistema
+    if not os.path.isfile(src_path): return
 
+    try:
         print(f"[INICIANDO] {filename}")
         
         ctl_path = os.path.join(WORK_DIR, filename + ".ctl")
@@ -88,16 +113,12 @@ def process_file(filename):
         usuario = os.environ.get("USERNAME", "USER")
         data_rec = datetime.fromtimestamp(os.path.getmtime(src_path))
 
-        # Detecta o encoding e as colunas dinamicamente
-        colunas, charset_name = get_file_info(src_path)
+        colunas_originais, charset_detectado = get_file_info(src_path)
 
-        # Gera o CTL com o charset detectado
-        ctl_text = build_ctl(src_path, colunas, usuario, data_rec, charset_name)
-        
+        ctl_text = build_ctl(src_path, colunas_originais, usuario, data_rec, charset_detectado)
         with open(ctl_path, "w", encoding="utf-8") as f:
             f.write(ctl_text)
 
-        # Executa SQL*Loader
         cmd = [
             SQLLDR,
             f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
@@ -110,10 +131,18 @@ def process_file(filename):
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
+        # RC 0: Sucesso total | RC 2: Sucesso com algumas linhas rejeitadas (ainda move)
         if result.returncode in [0, 2]:
-            print(f"[SUCESSO] {filename} carregado como {charset_name}")
+            print(f"[SUCESSO] {filename} importado. Movendo para _processados.")
+            dest_path = os.path.join(PROC_DIR, filename)
+            
+            # Se já existir um arquivo com mesmo nome lá, remove para evitar erro de movimentação
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+            
+            shutil.move(src_path, PROC_DIR)
         else:
-            print(f"[ERRO] {filename} falhou. Verifique {log_path}")
+            print(f"[ERRO] {filename} falhou (RC={result.returncode}). Mantido na pasta original.")
 
     except Exception as e:
         print(f"[FALHA CRÍTICA] {filename}: {str(e)}")
@@ -123,13 +152,17 @@ def process_file(filename):
 # ============================================================
 
 if __name__ == "__main__":
-    start = datetime.now()
+    tempo_inicio = datetime.now()
     
+    # Filtra apenas arquivos CSV e TXT da raiz da pasta
     files = [f for f in os.listdir(CSV_FOLDER) 
-             if f.lower().endswith((".csv", ".txt"))]
+             if f.lower().endswith((".csv", ".txt")) and os.path.isfile(os.path.join(CSV_FOLDER, f))]
 
-    # Processamento paralelo (ajustado para 3 workers para não travar o disco)
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        executor.map(process_file, files)
+    if not files:
+        print("Nenhum arquivo para processar.")
+    else:
+        # Processa 3 arquivos por vez para garantir velocidade e estabilidade
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            executor.map(process_file, files)
 
-    print(f"\nTempo total de execução: {datetime.now() - start}")
+    print(f"\nTempo total de execução: {datetime.now() - tempo_inicio}")
