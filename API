@@ -1,100 +1,38 @@
-SQL*Loader: Release 21.0.0.0.0 - Production on Fri Feb 13 10:52:21 2026
-Version 21.3.0.0.0
+DROP TABLE TESTE2_STAGING;
 
-Copyright (c) 1982, 2021, Oracle and/or its affiliates.  All rights reserved.
-
-Control File:   C:\Users\thatyane_soares\Documents\Projeto\CSV\_work\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt.ctl
-Character Set WE8MSWIN1252 specified for all input.
-
-Data File:      C:\Users\thatyane_soares\Documents\Projeto\CSV\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt
-  Bad File:     C:\Users\thatyane_soares\Documents\Projeto\CSV\_logs\260210_DRESUMOEMIS-RDB_CETIP21_P01757.txt.bad
-  Discard File:  none specified
- 
- (Allow all discards)
-
-Number to load: ALL
-Number to skip: 1
-Errors allowed: 100000
-Continuation:    none specified
-Path used:      Direct
-Silent options: FEEDBACK
-Table TESTE2_STAGING, loaded from every logical record.
-Insert option in effect for this table: APPEND
-TRAILING NULLCOLS option in effect
-
-   Column Name                  Position   Len  Term Encl Datatype
------------------------------- ---------- ----- ---- ---- ---------------------
-DATA_IMPORTACAO                                           EXPRESSION
-    SQL string for column : "SYSDATE"
-USER_IMPORT                                               CONSTANT
-    Value is 'thatyane_soares'
-DATA_ARQUIVO_RECEBIMENTO                                  EXPRESSION
-    SQL string for column : "TO_DATE('2026-02-11 03:13:46', 'YYYY-MM-DD HH24:MI:SS')"
-"Codigo do Registrador"             FIRST  4000   ;  O(") CHARACTER            
-"Data de Vencimento"                 NEXT  4000   ;  O(") CHARACTER            
-"Codigo do Tipo do Ativo"            NEXT  4000   ;  O(") CHARACTER            
-"Ativo"                              NEXT  4000   ;  O(") CHARACTER            
-"Data da Emissao"                    NEXT  4000   ;  O(") CHARACTER            
-"Quantidade Depositada"              NEXT  4000   ;  O(") CHARACTER            
-"Quantidade Emitida"                 NEXT  4000   ;  O(") CHARACTER            
-"Valor Atual"                        NEXT  4000   ;  O(") CHARACTER            
-"Juros"                              NEXT  4000   ;  O(") CHARACTER            
-"Valor Total"                        NEXT  4000   ;  O(") CHARACTER            
-"Indicador de Registrador"           NEXT  4000   ;  O(") CHARACTER            
-"Código do Agente de Pagamento"       NEXT  4000   ;  O(") CHARACTER            
-"Valor Un. Emissao"                  NEXT  4000   ;  O(") CHARACTER            
-"Rentabilidade/Indexador/Taxa Flutuante"       NEXT  4000   ;  O(") CHARACTER            
-"% Indice/Taxa Flutuante"            NEXT  4000   ;  O(") CHARACTER            
-"Descricao do Indice (VCP)"          NEXT  4000   ;  O(") CHARACTER            
-"Tipo do Indice (VCP)"               NEXT  4000   ;  O(") CHARACTER            
-"Taxa de Juros/Spread"               NEXT  4000   ;  O(") CHARACTER            
-"Forma de Pagamento"                 NEXT  4000   ;  O(") CHARACTER            
-"Criterio de Juros"                  NEXT  4000   ;  O(") CHARACTER            
-"Valor Total Anterior"               NEXT  4000   ;  O(") CHARACTER            
-"Valor PU Anterior"                  NEXT  4000   ;  O(") CHARACTER            
-"Valor PU Atual"                     NEXT  4000   ;  O(") CHARACTER            
-"Data da Curva"                      NEXT  4000   ;  O(") CHARACTER            
-"Condicao de Resgate Antecipado"       NEXT  4000   ;  O(") CHARACTER            
-"Juros Vencimento"                   NEXT  4000   ;  O(") CHARACTER            
-"Valor Total Vencimento"             NEXT  4000   ;  O(") CHARACTER            
-"Tipo de Regime"                     NEXT  4000   ;  O(") CHARACTER            
-"Descricao Adicional"                NEXT  4000   ;  O(") CHARACTER            
-
-SQL*Loader-466: Column "Codigo do Registrador" does not exist in table TESTE2_STAGING.
-
-
-modelo que está no oracle 
-DATA_IMPORTACAO	DATE	No	SYSDATE 
-USER_IMPORT	VARCHAR2(128 BYTE)	No	SYS_CONTEXT('USERENV','SESSION_USER') 
-ID_UNICO_ARQUIVO	NUMBER(10,0)	Yes
-DATA_ARQUIVO_RECEBIMENTO	DATE	Yes
-codigo_do_registrador	NUMBER	Yes
-data_de_vencimento	NUMBER	Yes
-codigo_do_tipo_do_ativo	VARCHAR2(3 BYTE)	Yes
-ativo	VARCHAR2(11 BYTE)	Yes
-data_da_emissao	NUMBER	Yes
-quantidade_depositada	NUMBER	Yes
-quantidade_emitida	NUMBER	Yes
-valor_atual	NUMBER	Yes
-juros	NUMBER	Yes
-valor_total	NUMBER	Yes
-indicador_de_registrador	VARCHAR2(50 BYTE)	Yes
-cdigo_do_agente_de_pagamento	VARCHAR2(50 BYTE)	Yes
-valor_un_emissao	NUMBER	Yes
-rentabilidadeindexadorta_b9928	VARCHAR2(9 BYTE)	Yes
-_indicetaxa_flutuante	NUMBER	Yes
-descricao_do_indice_vcp	VARCHAR2(50 BYTE)	Yes
-tipo_do_indice_vcp	VARCHAR2(50 BYTE)	Yes
-taxa_de_jurosspread	NUMBER	Yes
-forma_de_pagamento	VARCHAR2(44 BYTE)	Yes
-criterio_de_juros	VARCHAR2(78 BYTE)	Yes
-valor_total_anterior	NUMBER	Yes
-valor_pu_anterior	NUMBER	Yes
-valor_pu_atual	NUMBER	Yes
-data_da_curva	NUMBER	Yes
-condicao_de_resgate_antecipado	VARCHAR2(1 BYTE)	Yes
-juros_vencimento	NUMBER	Yes
-valor_total_vencimento	NUMBER	Yes
-tipo_de_regime	VARCHAR2(10 BYTE)	Yes
-descricao_adicional	VARCHAR2(50 BYTE)	Yes
-ID	NUMBER	No	"CUSTODIA"."ISEQ$$_82865".nextval
+CREATE TABLE TESTE2_STAGING (
+    DATA_IMPORTACAO                DATE DEFAULT SYSDATE,
+    USER_IMPORT                     VARCHAR2(128),
+    ID_UNICO_ARQUIVO                NUMBER(10),
+    DATA_ARQUIVO_RECEBIMENTO       DATE,
+    codigo_do_registrador          NUMBER,
+    data_de_vencimento             NUMBER,
+    codigo_do_tipo_do_ativo        VARCHAR2(20),
+    ativo                          VARCHAR2(20),
+    data_da_emissao                NUMBER,
+    quantidade_depositada          NUMBER,
+    quantidade_emitida             NUMBER,
+    valor_atual                    NUMBER,
+    juros                          NUMBER,
+    valor_total                    NUMBER,
+    indicador_de_registrador       VARCHAR2(100),
+    codigo_do_agente_de_pagamento  VARCHAR2(100),
+    valor_un_emissao               NUMBER,
+    rentabilidade_indexador_taxa   VARCHAR2(100),
+    percentual_indice_taxa         NUMBER,
+    descricao_do_indice_vcp        VARCHAR2(200),
+    tipo_do_indice_vcp             VARCHAR2(100),
+    taxa_de_juros_spread           NUMBER,
+    forma_de_pagamento             VARCHAR2(100),
+    criterio_de_juros              VARCHAR2(200),
+    valor_total_anterior           NUMBER,
+    valor_pu_anterior              NUMBER,
+    valor_pu_atual                 NUMBER,
+    data_da_curva                  NUMBER,
+    condicao_resgate_antecipado    VARCHAR2(50),
+    juros_vencimento               NUMBER,
+    valor_total_vencimento         NUMBER,
+    tipo_de_regime                 VARCHAR2(50),
+    descricao_adicional            VARCHAR2(500),
+    ID                             NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY
+);
