@@ -1,8 +1,6 @@
 import os
 import re
-import sys
 import shutil
-import hashlib
 import subprocess
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -11,310 +9,130 @@ from concurrent.futures import ThreadPoolExecutor
 # CONFIGURAÇÕES
 # ============================================================
 
-CSV_FOLDER     = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
-TARGET_TABLE   = "TESTE2_STAGING"
-
-# Preferencialmente use variáveis de ambiente (fallback para os valores atuais)
-ORACLE_USER     = os.getenv("ORACLE_USER", "custodia")
-ORACLE_PASSWORD = os.getenv("ORACLE_PASSWORD", "MVPCustodia2025")
-ORACLE_DSN      = os.getenv("ORACLE_DSN", "localhost:1522/XEPDB1")
-SQLLDR          = os.getenv("SQLLDR_BIN", "sqlldr")      # ou caminho completo para o sqlldr
-SQLPLUS         = os.getenv("SQLPLUS_BIN", "sqlplus")    # ou caminho completo para o sqlplus
-
-# Formato de data que vem no ARQUIVO (ajuste se necessário)
-FILE_DATE_FORMAT = "DD/MM/YYYY"
+CSV_FOLDER = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
+TARGET_TABLE = "TESTE2_STAGING"
+ORACLE_AUTH = "custodia/MVPCustodia2025@localhost:1522/XEPDB1"
+SQLLDR = "sqlldr"
 
 WORK_DIR = os.path.join(CSV_FOLDER, "_work")
-LOG_DIR  = os.path.join(CSV_FOLDER, "_logs")
+LOG_DIR = os.path.join(CSV_FOLDER, "_logs")
 PROC_DIR = os.path.join(CSV_FOLDER, "_processados")
 
-os.makedirs(WORK_DIR, exist_ok=True)
-os.makedirs(LOG_DIR,  exist_ok=True)
-os.makedirs(PROC_DIR, exist_ok=True)
+for d in [WORK_DIR, LOG_DIR, PROC_DIR]: os.makedirs(d, exist_ok=True)
 
 # ============================================================
-# NORMALIZAÇÃO E MAPEAMENTO DE CABEÇALHOS (Arquivo -> Oracle)
+# UTILITÁRIOS
 # ============================================================
 
-def normalize_text(name: str) -> str:
-    """Normaliza texto para snake_case sem acento, % -> 'percentual'."""
+def normalize_column(name):
+    """Transforma cabeçalho do arquivo no nome da coluna da tabela."""
     n = name.lower().strip().replace('"', '')
-    n = re.sub(r'[áàâãä]', 'a', n)
-    n = re.sub(r'[éèêë]', 'e', n)
-    n = re.sub(r'[íìîï]', 'i', n)
-    n = re.sub(r'[óòôõö]', 'o', n)
-    n = re.sub(r'[úùûü]', 'u', n)
-    n = re.sub(r'[ç]', 'c', n)
-    n = n.replace('%', 'percentual')
+    n = re.sub(r'[áàâãä]', 'a', n); n = re.sub(r'[éèêë]', 'e', n)
+    n = re.sub(r'[íìîï]', 'i', n); n = re.sub(r'[óòôõö]', 'o', n)
+    n = re.sub(r'[úùûü]', 'u', n); n = re.sub(r'[ç]', 'c', n)
+    if '%' in n: n = n.replace('%', 'percentual')
     n = re.sub(r'[^a-z0-9]+', '_', n).strip('_')
+    
+    # Ajustes específicos para bater com sua tabela normalizada
+    if 'rentabilidade_indexador' in n: return 'rentabilidade_indexador_taxa_flutuante'
+    if 'percentual_indice_taxa' in n: return 'percentual_indice_taxa_flutuante'
     return n
 
-# Mapeamento explícito de cabeçalho do ARQUIVO (normalizado) -> COLUNA NO ORACLE (normalizada)
-# Baseado no cabeçalho que você forneceu
-ALIAS_MAP = {
-    # Casos que mudam de nome entre arquivo e Oracle:
-    "percentual_indice_taxa_flutuante": "percentual_indice_taxa",
-    "condicao_de_resgate_antecipado": "condicao_resgate_antecipado",
-    # Demais mapeamentos são identidades (arquivo == oracle após normalizar)
-    # Você pode adicionar outros aqui se aparecerem variações novas
-}
-
-# ============================================================
-# DETECÇÃO DE ENCODING DO ARQUIVO
-# ============================================================
-
-def get_file_info(path):
-    """
-    Lê a primeira linha como cabeçalho com uma estratégia de fallback de encoding.
-    Retorna: (lista_de_colunas_do_arquivo, oracle_charset)
-    """
-    attempts = [
-        ("utf-8-sig", "AL32UTF8"),
-        ("cp1252",    "WE8MSWIN1252"),
-        ("latin-1",   "WE8MSWIN1252"),
-    ]
-    last_err = None
-    for enc, oracle_cs in attempts:
-        try:
-            with open(path, 'r', encoding=enc) as f:
-                header = f.readline().strip()
-                cols = [h.strip().strip('"') for h in header.split(';')]
-                return cols, oracle_cs
-        except UnicodeDecodeError as e:
-            last_err = e
-            continue
-
-    # Último recurso: leitura com substituição
-    with open(path, 'r', encoding='utf-8', errors='replace') as f:
-        header = f.readline().strip()
-        cols = [h.strip().strip('"') for h in header.split(';')]
-        return cols, "AL32UTF8"
-
-# ============================================================
-# LEITURA DE COLUNAS EXISTENTES NA TABELA (TIPOS INCLUSOS)
-# ============================================================
-
-def get_existing_columns_with_types():
-    """
-    Retorna dict: {nome_coluna_normalizado: data_type_upper}
-    Ex.: {"valor_total": "NUMBER", "data_da_curva": "DATE", ...}
-    """
-    sql = f"""
-SET HEADING OFF FEEDBACK OFF VERIFY OFF ECHO OFF PAGESIZE 0
-SELECT LOWER(column_name) || '|' || UPPER(data_type)
-FROM user_tab_columns
-WHERE table_name = UPPER('{TARGET_TABLE}')
-ORDER BY column_id;
-EXIT
-"""
+def get_rows_imported(log_path):
+    """Extrai a contagem de linhas do log do SQL*Loader."""
     try:
-        result = subprocess.run(
-            [SQLPLUS, "-S", f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}"],
-            input=sql, capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            print("[AVISO] Não foi possível listar colunas da tabela.")
-            print(result.stderr or result.stdout)
-            return {}
-        lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
-        mapping = {}
-        for ln in lines:
-            if '|' in ln:
-                col, typ = ln.split('|', 1)
-                mapping[normalize_text(col)] = typ.strip().upper()
-        return mapping
-    except Exception as e:
-        print(f"[AVISO] Falha obtendo colunas do banco: {e}")
-        return {}
+        with open(log_path, 'r', encoding='latin-1') as f:
+            content = f.read()
+            # Procura o padrão "X Rows successfully loaded."
+            match = re.search(r'(\d+)\s+Rows\s+successfully\s+loaded', content)
+            return match.group(1) if match else "0"
+    except: return "N/A"
 
 # ============================================================
-# GERAÇÃO DE ID ÚNICO DO ARQUIVO (CONSTANT PARA CTL)
+# PROCESSO PRINCIPAL
 # ============================================================
 
-def build_file_unique_id(filename: str, mtime: float) -> str:
-    dt = datetime.fromtimestamp(mtime).strftime("%Y%m%d%H%M%S")
-    base = f"{os.path.basename(filename)}_{dt}"
-    # Opcional: anexar hash curto do caminho para evitar colisões
-    h = hashlib.sha1((filename + str(mtime)).encode("utf-8")).hexdigest()[:8]
-    return f"{base}_{h}"
+def build_ctl(csv_path, columns, user, date_rec):
+    """Gera o arquivo de controle focado em performance."""
+    d_str = date_rec.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Lista de termos que identificam colunas numéricas para conversão de vírgula
+    num_terms = ['valor', 'quantidade', 'juros', 'taxa', 'percentual', 'curva', 'vencimento', 'emissao']
 
-# ============================================================
-# GERAÇÃO DO CONTROL FILE (.CTL)
-# ============================================================
-
-def build_ctl(csv_file, colunas_arquivo, usuario, data_rec, oracle_charset, table_cols_types):
-    """
-    - colunas_arquivo: lista dos nomes conforme no arquivo (sem normalização)
-    - table_cols_types: dict normalizado -> DATA_TYPE (ex.: {"valor_total":"NUMBER"})
-    """
-    d = data_rec.strftime("%Y-%m-%d %H:%M:%S")
-    opts = "DIRECT=TRUE, ERRORS=100000, BINDSIZE=20971520, READSIZE=20971520, COLUMNARRAYROWS=10000"
-
-    id_unico = build_file_unique_id(csv_file, os.path.getmtime(csv_file))
-
-    linhas = [
-        f"OPTIONS ({opts})",
+    lines = [
+        "OPTIONS (DIRECT=TRUE, ERRORS=100000, BINDSIZE=20971520, READSIZE=20971520, COLUMNARRAYROWS=10000)",
         "LOAD DATA",
-        f"CHARACTERSET {oracle_charset}",
-        f"INFILE '{csv_file}'",
-        f"INTO TABLE {TARGET_TABLE}",
-        "APPEND",
-        "FIELDS TERMINATED BY ';'",
-        "OPTIONALLY ENCLOSED BY '\"'",
+        "CHARACTERSET WE8MSWIN1252", # Aceita a maioria dos CSVs brasileiros
+        f"INFILE '{csv_path}'",
+        f"INTO TABLE {TARGET_TABLE} APPEND",
+        "FIELDS TERMINATED BY ';' OPTIONALLY ENCLOSED BY '\"'",
         "TRAILING NULLCOLS",
         "(",
-        '  DATA_IMPORTACAO EXPRESSION "SYSDATE",',
-        f"  USER_IMPORT CONSTANT '{usuario}',",
-        f'  DATA_ARQUIVO_RECEBIMENTO EXPRESSION "TO_DATE(\'{d}\', \'YYYY-MM-DD HH24:MI:SS\')",',
+        "  DATA_IMPORTACAO EXPRESSION \"SYSDATE\",",
+        f"  USER_IMPORT CONSTANT '{user}',",
+        f"  DATA_ARQUIVO_RECEBIMENTO EXPRESSION \"TO_DATE('{d_str}', 'YYYY-MM-DD HH24:MI:SS')\",",
     ]
 
-    # Se a coluna existe no banco, adiciona o ID_UNICO_ARQUIVO como CONSTANT
-    if "id_unico_arquivo" in table_cols_types:
-        linhas.append(f"  ID_UNICO_ARQUIVO CONSTANT '{id_unico}',")
-
-    total_fields = len(colunas_arquivo)
-
-    # Função para decidir se é númerico pela tipagem OU pelo nome (fallback)
-    def is_numeric(target_col_norm: str) -> bool:
-        t = table_cols_types.get(target_col_norm, "")
-        if t in {"NUMBER", "FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"}:
-            return True
-        # Heurística pelo nome, caso não tenha tipo
-        return any(x in target_col_norm for x in ["valor", "quantidade", "juros", "taxa", "percentual", "pu"])
-
-    # Função para decidir se é data
-    def is_date(target_col_norm: str) -> bool:
-        t = table_cols_types.get(target_col_norm, "")
-        return t in {"DATE", "TIMESTAMP", "TIMESTAMP(6)", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITH LOCAL TIME ZONE"} \
-               or target_col_norm in {"data_de_vencimento", "data_da_emissao", "data_da_curva"}
-
-    # Para cada coluna do arquivo
-    for i, col_arq in enumerate(colunas_arquivo):
-        field_norm = normalize_text(col_arq)
-        # Nome de destino no Oracle após aplicar ALIAS_MAP (caso não mapeado: destino = field_norm)
-        target_norm = ALIAS_MAP.get(field_norm, field_norm)
-
-        sep = "," if i < total_fields - 1 else ""
-
-        # Se a coluna destino não existe na tabela -> declarar apenas como FILLER
-        if target_norm not in table_cols_types:
-            linhas.append(f"  {field_norm} FILLER CHAR(4000){sep}")
-            continue
-
-        # Se os nomes diferem, precisamos declarar o campo do arquivo (FILLER) e depois mapear a coluna do banco referenciando :field
-        need_indirect = (target_norm != field_norm)
-
-        # Datas
-        if is_date(target_norm):
-            if need_indirect:
-                linhas.append(f"  {field_norm} FILLER CHAR(4000),")
-                linhas.append(f'  {target_norm} DATE "{FILE_DATE_FORMAT}"')
-            else:
-                linhas.append(f'  {target_norm} DATE "{FILE_DATE_FORMAT}"')
-            linhas[-1] = linhas[-1] + sep
-            continue
-
-        # Numéricos: padroniza decimal (remove . de milhar, troca , por .)
-        if is_numeric(target_norm):
-            expr = '"REPLACE(REPLACE(:%s, \'.\', \'\'), \',\', \'.\')"' % (field_norm if need_indirect else target_norm)
-            if need_indirect:
-                linhas.append(f"  {field_norm} FILLER CHAR(4000),")
-                linhas.append(f"  {target_norm} CHAR(4000) {expr}")
-            else:
-                linhas.append(f"  {target_norm} CHAR(4000) {expr}")
-            linhas[-1] = linhas[-1] + sep
-            continue
-
-        # Texto (default)
-        if need_indirect:
-            linhas.append(f"  {field_norm} FILLER CHAR(4000),")
-            linhas.append(f"  {target_norm} CHAR(4000)")
+    for i, col in enumerate(columns):
+        col_db = normalize_column(col)
+        sep = "," if i < len(columns) - 1 else ""
+        
+        if any(t in col_db for t in num_terms):
+            lines.append(f'  {col_db} CHAR(4000) "REPLACE(REPLACE(:{col_db}, \'.\', \'\'), \',\', \'.\')"{sep}')
         else:
-            linhas.append(f"  {target_norm} CHAR(4000)")
-        linhas[-1] = linhas[-1] + sep
-
-    linhas.append(")")
-    return "\n".join(linhas)
-
-# ============================================================
-# PROCESSAMENTO DO ARQUIVO (gera CTL, executa SQLLDR, move)
-# ============================================================
+            lines.append(f'  {col_db} CHAR(4000){sep}')
+    
+    lines.append(")")
+    return "\n".join(lines)
 
 def process_file(filename):
-    src_path = os.path.join(CSV_FOLDER, filename)
-
-    # Ignora pastas e não-arquivos
-    if not os.path.isfile(src_path):
-        return
+    start_proc = datetime.now()
+    src = os.path.join(CSV_FOLDER, filename)
+    if not os.path.isfile(src) or filename.startswith('_'): return
 
     try:
-        print(f"[INICIANDO] {filename}")
+        # 1. Cabeçalho e Metadata
+        with open(src, 'r', encoding='latin-1') as f:
+            header = f.readline().strip().split(';')
+        
+        user = os.environ.get("USERNAME", "USER")
+        mtime = datetime.fromtimestamp(os.path.getmtime(src))
+        
+        # 2. Caminhos
+        ctl = os.path.join(WORK_DIR, f"{filename}.ctl")
+        log = os.path.join(LOG_DIR, f"{filename}.log")
+        bad = os.path.join(LOG_DIR, f"{filename}.bad")
 
-        ctl_path = os.path.join(WORK_DIR, filename + ".ctl")
-        log_path = os.path.join(LOG_DIR,  filename + ".log")
-        bad_path = os.path.join(LOG_DIR,  filename + ".bad")
+        # 3. Gerar CTL e Executar
+        with open(ctl, "w", encoding="utf-8") as f:
+            f.write(build_ctl(src, header, user, mtime))
 
-        usuario = os.environ.get("USERNAME", "USER")
-        data_rec = datetime.fromtimestamp(os.path.getmtime(src_path))
+        cmd = [SQLLDR, ORACLE_AUTH, f"control={ctl}", f"log={log}", f"bad={bad}", "skip=1", "silent=header,feedback"]
+        res = subprocess.run(cmd, capture_output=True, text=True)
 
-        # 1) Detecta encoding + lê cabeçalho do arquivo
-        colunas_arquivo, oracle_charset = get_file_info(src_path)
-
-        # 2) Lê colunas existentes da tabela (com tipos)
-        table_cols_types = get_existing_columns_with_types()
-
-        # 3) Monta o .ctl
-        ctl_text = build_ctl(src_path, colunas_arquivo, usuario, data_rec, oracle_charset, table_cols_types)
-        with open(ctl_path, "w", encoding="utf-8") as f:
-            f.write(ctl_text)
-
-        # 4) Executa o SQL*Loader
-        cmd = [
-            SQLLDR,
-            f"{ORACLE_USER}/{ORACLE_PASSWORD}@{ORACLE_DSN}",
-            f"control={ctl_path}",
-            f"log={log_path}",
-            f"bad={bad_path}",
-            "skip=1",
-            "silent=header,feedback"
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        # 5) Avalia RC e move arquivo em caso de sucesso (RC 0 ou 2)
-        if result.returncode in [0, 2]:
-            print(f"[SUCESSO] {filename} importado. Movendo para _processados.")
-            dest_path = os.path.join(PROC_DIR, filename)
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
-            shutil.move(src_path, dest_path)
+        # 4. Finalização
+        duration = datetime.now() - start_proc
+        if res.returncode in [0, 2]:
+            rows = get_rows_imported(log)
+            print(f"[OK] {filename} | Linhas: {rows} | Tempo: {duration}")
+            shutil.move(src, os.path.join(PROC_DIR, filename))
         else:
-            print(f"[ERRO] {filename} falhou (RC={result.returncode}). Mantido na pasta original.")
-            if result.stdout:
-                print("[sqlldr stdout]\n", result.stdout)
-            if result.stderr:
-                print("[sqlldr stderr]\n", result.stderr)
+            print(f"[ERRO] {filename} | Verifique log em _logs")
 
     except Exception as e:
-        print(f"[FALHA CRÍTICA] {filename}: {str(e)}")
+        print(f"[FALHA] {filename}: {e}")
 
 # ============================================================
-# MAIN
+# EXECUÇÃO
 # ============================================================
 
 if __name__ == "__main__":
-    tempo_inicio = datetime.now()
+    global_start = datetime.now()
+    files = [f for f in os.listdir(CSV_FOLDER) if f.lower().endswith((".csv", ".txt"))]
 
-    # Lista apenas arquivos .csv e .txt da pasta raiz
-    files = [
-        f for f in os.listdir(CSV_FOLDER)
-        if f.lower().endswith((".csv", ".txt")) and os.path.isfile(os.path.join(CSV_FOLDER, f))
-    ]
+    print(f"Iniciando carga de {len(files)} arquivos...\n")
+    
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(process_file, files)
 
-    if not files:
-        print("Nenhum arquivo para processar.")
-    else:
-        # Processa 3 em paralelo
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            executor.map(process_file, files)
-
-    print(f"\nTempo total de execução: {datetime.now() - tempo_inicio}")
+    print(f"\nTempo total: {datetime.now() - global_start}")
