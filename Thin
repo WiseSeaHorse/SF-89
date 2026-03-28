@@ -7,10 +7,6 @@ print("INICIANDO IMPORTADOR CSV PARA ORACLE")
 print("=" * 50)
 
 # Configurações
-ORACLE_USER = "custodia"
-ORACLE_PASSWORD = "MVPCustodia2025"
-ORACLE_DSN = "localhost:1522/XEPDB1"
-CSV_FOLDER = "C:/Users/thatyane_soares/OneDrive - Sicredi/Documents/Projeto/csv_files"
 
 print(f"Usuario: {ORACLE_USER}")
 print(f"DSN: {ORACLE_DSN}")
