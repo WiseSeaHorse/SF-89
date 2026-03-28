@@ -4,12 +4,12 @@ import oracledb
 import re
 
 # Configurações do Oracle Database
-ORACLE_USER = "custodia"
-ORACLE_PASSWORD = "MVPCustodia2025"
-ORACLE_DSN = "localhost:1522/XEPDB1"  # Corrigido: use apenas DSN
+ORACLE_USER = 
+ORACLE_PASSWORD = 
+ORACLE_DSN =   # Corrigido: use apenas DSN
 
 # Pasta onde estão os arquivos CSV (altere conforme necessário)
-CSV_FOLDER = "C:/Users/thatyane_soares/OneDrive - Sicredi/Documents/Projeto/csv_files"
+CSV_FOLDER = 
 
 def find_csv_files(folder_path):
     """Encontra todos os arquivos CSV na pasta especificada"""
