@@ -8,10 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
-CSV_FOLDER = r"C:\Users\thatyane_soares\Documents\Projeto\CSV"
-TARGET_TABLE = "TESTE2_STAGING"
-ORACLE_AUTH = "custodia/MVPCustodia2025@localhost:1522/XEPDB1"
-SQLLDR = "sqlldr"
+
 
 WORK_DIR = os.path.join(CSV_FOLDER, "_work")
 LOG_DIR = os.path.join(CSV_FOLDER, "_logs")
